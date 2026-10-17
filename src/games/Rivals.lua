@@ -2,6 +2,10 @@
 -- Aim assist, FOV ring, triggerbot and enemy ESP. All client side: it moves your camera and clicks,
 -- it never touches the game's own state. Assumes standard Player characters with a Head part and a
 -- first person camera with the crosshair at screen centre; if Rivals changes that, targets will be off.
+--
+-- Rivals teleports you from the lobby into a match (a different place of the same universe). This module
+-- is picked by universe id in Games.index, and loader.lua re-runs itself after the teleport, so the tab
+-- is there in the lobby and in every match.
 
 local import = ...
 local Util = import("Util")

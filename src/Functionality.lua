@@ -18,6 +18,7 @@ local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local Stats = game:GetService("Stats")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 
 local lp = Players.LocalPlayer
 local make, lerp = Util.make, Util.lerp
@@ -30,50 +31,111 @@ local ctx = nil
 local hudGui = nil
 local toasts = nil
 local conn = nil
+local hudConns = {}
+local positions = {} -- hud key -> Vector2 (where the user dragged it), survives toggling
+local dragging = nil -- { info, key, input, grab }
+local huds = {} -- every draggable label, so they can be pulled back on screen after a resize
 
-local function statLabel(name, y)
-	return make("TextLabel", {
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function screenSize()
+	local s = hudGui and hudGui.AbsoluteSize or Vector2.zero
+	if s.X <= 0 or s.Y <= 0 then
+		local cam = workspace.CurrentCamera
+		s = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	end
+	return s
+end
+
+local function clampPos(obj, p)
+	local vp, sz = screenSize(), obj.AbsoluteSize
+	return Vector2.new(
+		math.clamp(p.X, 0, math.max(0, vp.X - sz.X)),
+		math.clamp(p.Y, 0, math.max(0, vp.Y - sz.Y))
+	)
+end
+
+-- default spot of a HUD label: stacked under Roblox's top bar on the left or right edge
+function Functionality.hudPos(side, row, width)
+	local x = 12
+	if side == "right" then
+		x = screenSize().X - (width or 100) - 12
+	end
+	return Vector2.new(x, GuiService:GetGuiInset().Y + 12 + (row or 0) * 28)
+end
+
+-- Makes a HUD element draggable (mouse or touch). Until the user moves it, it sits at its default spot
+-- (side = "left" | "right", row = how far down the stack); after that it stays where it was put.
+function Functionality.draggable(obj, key, side, row)
+	obj.Active = true
+	obj.AnchorPoint = Vector2.zero
+	local info = { obj = obj, side = side or "left", row = row or 0 }
+	local function place()
+		local p = positions[key] or Functionality.hudPos(info.side, info.row, obj.AbsoluteSize.X)
+		p = clampPos(obj, p)
+		obj.Position = UDim2.fromOffset(p.X, p.Y)
+	end
+	place()
+	-- text changes resize the label: keep right-side labels flush and everything on screen
+	obj:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+	obj.InputBegan:Connect(function(input)
+		if isPress(input) then
+			dragging = { info = info, key = key, input = input, grab = Util.pointer(input) - obj.AbsolutePosition }
+		end
+	end)
+	info.place = place
+	huds[#huds + 1] = info
+	return info
+end
+
+-- pill-shaped label that fits its text. Builds hudGui children, so only call it from a feature's init.
+local function hudLabel(name, color, font)
+	local l = make("TextLabel", {
 		Name = name,
-		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -12, 0, y),
-		Size = UDim2.fromOffset(160, 18),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.Code,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 22),
+		BackgroundColor3 = Color3.fromRGB(22, 24, 31),
+		BackgroundTransparency = 0.35,
+		BorderSizePixel = 0,
+		Font = font or Enum.Font.Code,
 		TextSize = 14,
-		TextColor3 = Color3.fromRGB(236, 238, 244),
-		TextStrokeTransparency = 0.5,
-		TextXAlignment = Enum.TextXAlignment.Right,
+		TextColor3 = color or Color3.fromRGB(236, 238, 244),
 		Visible = false,
 		Text = "",
 	}, hudGui)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, l)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, l)
+	make("UISizeConstraint", { MinSize = Vector2.new(72, 22) }, l)
+	return l
+end
+
+-- fps / ping / clock: draggable, start stacked on the right
+local function statLabel(name, row)
+	local l = hudLabel(name)
+	Functionality.draggable(l, name, "right", row)
+	return l
 end
 
 ---------------------------------------------------------------------
 -- HUD features
 ---------------------------------------------------------------------
 
--- overlay: watermark, value = opacity
+-- overlay: watermark, value = opacity. Every HUD label below can be dragged anywhere on screen.
 do
 	local label
 	features.overlay = {
 		init = function(c)
-			label = make("TextLabel", {
-				Name = "Overlay",
-				Position = UDim2.fromOffset(12, 12),
-				Size = UDim2.fromOffset(260, 18),
-				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamBold,
-				TextSize = 14,
-				TextColor3 = Color3.fromRGB(139, 125, 255),
-				TextStrokeTransparency = 0.5,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				Visible = false,
-				Text = "FMenu | " .. c.profileName,
-			}, hudGui)
+			label = hudLabel("Overlay", Color3.fromRGB(139, 125, 255), Enum.Font.GothamBold)
+			label.Text = "FMenu | " .. c.profileName
+			Functionality.draggable(label, "Overlay", "left", 0)
 		end,
 		set = function(on, v)
 			label.Visible = on
 			label.TextTransparency = 1 - v / 100
+			label.BackgroundTransparency = 1 - 0.65 * v / 100
 		end,
 	}
 end
@@ -113,7 +175,7 @@ do
 	local label, enabled, interval, acc, frames = nil, false, 0.5, 0, 0
 	features.fps = {
 		init = function()
-			label = statLabel("Fps", 12)
+			label = statLabel("Fps", 0)
 		end,
 		set = function(on, v)
 			enabled = on
@@ -139,7 +201,7 @@ do
 	local label, enabled, interval, acc = nil, false, 0.5, 0
 	features.ping = {
 		init = function()
-			label = statLabel("Ping", 30)
+			label = statLabel("Ping", 1)
 		end,
 		set = function(on, v)
 			enabled = on
@@ -167,7 +229,7 @@ do
 	local label, enabled, twelve, acc = nil, false, false, 1
 	features.clock = {
 		init = function()
-			label = statLabel("Clock", 48)
+			label = statLabel("Clock", 2)
 		end,
 		set = function(on, v)
 			enabled = on
@@ -720,15 +782,21 @@ function Functionality.init(c)
 		Name = "MenuWidgetHUD",
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
-		DisplayOrder = 50,
+		DisplayOrder = 1000, -- above Roblox's core gui, below the menu itself
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	}, lp:WaitForChild("PlayerGui"))
+	})
+	Util.mount(hudGui)
 	ctx.hud = hudGui
+	-- helpers for features that put labels on the HUD (see Games' modules)
+	ctx.hudLabel = hudLabel
+	ctx.draggable = Functionality.draggable
+	ctx.hudPos = Functionality.hudPos
 
+	-- toasts sit bottom centre so they never land on the menu, whatever height it has
 	toasts = make("Frame", {
 		Name = "Toasts",
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 268),
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -110),
 		Size = UDim2.fromOffset(320, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundTransparency = 1,
@@ -737,7 +805,31 @@ function Functionality.init(c)
 		Padding = UDim.new(0, 4),
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
 	}, toasts)
+
+	-- dragging HUD labels: follow the pointer anywhere on screen until it is released
+	hudConns[#hudConns + 1] = UserInputService.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input == dragging.input then
+			local p = clampPos(dragging.info.obj, Util.pointer(dragging.input) - dragging.grab)
+			positions[dragging.key] = p
+			dragging.info.obj.Position = UDim2.fromOffset(p.X, p.Y)
+		end
+	end)
+	hudConns[#hudConns + 1] = UserInputService.InputEnded:Connect(function(input)
+		if dragging and isPress(input) then
+			dragging = nil
+		end
+	end)
+	-- screen resized: pull every label back on screen
+	hudConns[#hudConns + 1] = hudGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		for _, info in ipairs(huds) do
+			info.place()
+		end
+	end)
 
 	for id, def in pairs(features) do
 		if def.init and not def._inited then
@@ -792,6 +884,12 @@ function Functionality.destroy()
 			pcall(def.destroy)
 		end
 	end
+	for _, c in ipairs(hudConns) do
+		c:Disconnect()
+	end
+	table.clear(hudConns)
+	table.clear(huds)
+	dragging = nil
 	if hudGui then
 		hudGui:Destroy()
 		hudGui = nil

@@ -2,6 +2,8 @@
 -- Small shared helpers for Functionality, ESP and the per-game modules.
 
 local Players = game:GetService("Players")
+local GuiService = game:GetService("GuiService")
+local UserInputService = game:GetService("UserInputService")
 
 local Util = {}
 
@@ -105,6 +107,42 @@ end
 function Util.visible(origin, part)
 	local hit = workspace:Raycast(origin, part.Position - origin, Util.rayParams())
 	return hit == nil or hit.Instance:IsDescendantOf(part.Parent)
+end
+
+-- Parents a ScreenGui where it draws above Roblox's own core gui (top bar, chat, player list):
+-- gethui() / CoreGui when the executor allows it, PlayerGui otherwise (core gui can cover it there).
+function Util.mount(gui)
+	local parent
+	if gethui then
+		local ok, h = pcall(gethui)
+		if ok and typeof(h) == "Instance" then
+			parent = h
+		end
+	end
+	if not parent then
+		local ok, core = pcall(game.GetService, game, "CoreGui")
+		if ok then
+			parent = core
+		end
+	end
+	if parent then
+		local ok = pcall(function()
+			gui.Parent = parent
+		end)
+		if ok and gui.Parent == parent then
+			return gui
+		end
+	end
+	gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+	return gui
+end
+
+-- pointer position of an input in the same space as a gui with IgnoreGuiInset = true
+function Util.pointer(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		return Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset()
+	end
+	return UserInputService:GetMouseLocation()
 end
 
 return Util

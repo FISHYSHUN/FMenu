@@ -16,6 +16,9 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
 
+local import = ...
+local Util = import("Util")
+
 local UI = {}
 UI.__index = UI
 
@@ -23,10 +26,11 @@ UI.CONFIG = {
 	HideSeconds = 4,
 	ToggleKey = Enum.KeyCode.Insert,
 	TopOffset = 12,
-	Expanded = Vector2.new(560, 246),
+	Width = 560, -- the height is not fixed, it follows the active tab (see UI:_layoutFor)
 	Pill = Vector2.new(176, 38),
 	LongPressSeconds = 0.5,
-	MaxRowsPerTab = 6,
+	SlideDistance = 180, -- how far panels travel when switching tabs
+	ScreenMargin = 24, -- free space kept under the menu before a tab starts scrolling
 	RepeatDelay = 0.35,
 	RepeatRate = 0.04,
 }
@@ -44,11 +48,15 @@ UI.THEME = {
 }
 
 local CFG, C = UI.CONFIG, UI.THEME
-local LEAD_W = 112
+local LEAD_W = 70
 local LEAD_EXP = UDim2.new(0, 14, 0, 0)
 local LEAD_MIN = UDim2.new(0.5, -LEAD_W / 2, 0, 0)
-local PANEL_POS = UDim2.fromOffset(14, 86)
-local PANEL_SIZE = UDim2.fromOffset(532, 130)
+-- vertical layout of the expanded menu: header + tab bar + PANEL_Y.. rows ..GAP, hint line, PAD
+local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 532
+local CELL_H, GAP = 38, 8 -- one row, space between rows
+local HINT_H, PAD = 14, 8
+local CHROME = PANEL_Y + GAP + HINT_H + PAD -- everything that is not the row panel
+local PANEL_POS = UDim2.fromOffset(PANEL_X, PANEL_Y)
 local POP_W, POP_H = 260, 76
 
 ---------------------------------------------------------------------
@@ -117,7 +125,8 @@ function UI.new(deps)
 		hideSeconds = CFG.HideSeconds,
 	}
 	self.rowList, self.rowsById = {}, {}
-	self.tabButtons, self.panels, self.tabRows, self.tabDots = {}, {}, {}, {}
+	self.tabButtons, self.panels, self.scrolls, self.tabRows, self.tabBadges = {}, {}, {}, {}, {}
+	self.expanded = Vector2.new(CFG.Width, 246) -- real height is set per tab once the rows exist
 	self._conns = {}
 
 	self:_buildShell()
@@ -130,9 +139,10 @@ function UI:_buildShell()
 		Name = "MenuWidget",
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
-		DisplayOrder = 100,
+		DisplayOrder = 1100, -- above the HUD gui and above Roblox's own core gui
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	}, Players.LocalPlayer:WaitForChild("PlayerGui"))
+	})
+	Util.mount(gui)
 	self.gui = gui
 
 	-- CanvasGroup so the rounded corners actually clip the contents
@@ -140,7 +150,7 @@ function UI:_buildShell()
 		Name = "Root",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, CFG.TopOffset),
-		Size = UDim2.fromOffset(CFG.Expanded.X, CFG.Expanded.Y),
+		Size = UDim2.fromOffset(self.expanded.X, self.expanded.Y),
 		BackgroundColor3 = C.panel,
 		BorderSizePixel = 0,
 	}, gui)
@@ -154,7 +164,7 @@ function UI:_buildShell()
 		Name = "Body",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 0),
-		Size = UDim2.fromOffset(CFG.Expanded.X, CFG.Expanded.Y),
+		Size = UDim2.fromOffset(self.expanded.X, self.expanded.Y),
 		BackgroundTransparency = 1,
 		ZIndex = 1,
 	}, root)
@@ -222,20 +232,6 @@ function UI:_buildShell()
 		TextColor3 = C.text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, self.lead)
-	-- how many features are on, visible even when minimized
-	self.count = make("TextLabel", {
-		Text = "0 on",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 68, 0.5, 0),
-		Size = UDim2.fromOffset(42, 16),
-		BackgroundColor3 = C.panel2,
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamBold,
-		TextSize = 11,
-		TextColor3 = C.muted,
-	}, self.lead)
-	corner(self.count, 8)
-
 	self.sub = make("TextLabel", {
 		Text = "",
 		AnchorPoint = Vector2.new(1, 0.5),
@@ -267,11 +263,12 @@ function UI:_buildShell()
 		SortOrder = Enum.SortOrder.LayoutOrder,
 	}, self.tabBar)
 
-	make("TextLabel", {
-		Text = "click = toggle  |  right-click (or long-press) = slider  |  Insert = hide",
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 224),
-		Size = UDim2.fromOffset(CFG.Expanded.X, 14),
+	-- pinned to the bottom of the body, so it always sits right under the last row
+	self.hint = make("TextLabel", {
+		Text = "click = toggle  |  right-click or long-press = slider  |  drag HUD text to move  |  Insert = hide",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -PAD),
+		Size = UDim2.fromOffset(CFG.Width, HINT_H),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham,
 		TextSize = 11,
@@ -409,45 +406,63 @@ function UI:build(tabs)
 		}, self.tabBar)
 		corner(tbtn, 7)
 		self.tabButtons[i] = tbtn
-		-- small green dot on a tab when something inside it is on
-		local dot = make("Frame", {
+		-- number of features that are on inside this tab (hidden at 0)
+		local badge = make("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -5, 0, 5),
-			Size = UDim2.fromOffset(5, 5),
+			Position = UDim2.new(1, -3, 0, 2),
+			Size = UDim2.fromOffset(0, 12),
+			AutomaticSize = Enum.AutomaticSize.X,
 			BackgroundColor3 = C.good,
 			BorderSizePixel = 0,
+			Font = Enum.Font.GothamBold,
+			TextSize = 9,
+			TextColor3 = C.panel,
+			Text = "0",
 			Visible = false,
 		}, tbtn)
-		corner(dot, 3)
-		self.tabDots[i] = dot
+		corner(badge, 6)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, badge)
+		make("UISizeConstraint", { MinSize = Vector2.new(12, 12) }, badge)
+		self.tabBadges[i] = badge
 		self.tabRows[i] = {}
 		table.insert(self._conns, tbtn.MouseButton1Click:Connect(function()
 			self:_selectTab(i)
 		end))
 
+		-- panel = clipped, sized to the tab's rows (animated as a whole when switching tabs).
+		-- scroll = only does anything when the rows are taller than the screen allows.
 		local panel = make("CanvasGroup", {
 			Name = "Panel_" .. tab.name,
 			Position = PANEL_POS,
-			Size = PANEL_SIZE,
+			Size = UDim2.fromOffset(PANEL_W, CELL_H),
 			BackgroundTransparency = 1,
 			Visible = i == 1,
 		}, self.body)
-		make("UIGridLayout", {
-			CellSize = UDim2.new(0.5, -4, 0, 38),
-			CellPadding = UDim2.fromOffset(8, 8),
-			SortOrder = Enum.SortOrder.LayoutOrder,
+		local scroll = make("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 0,
+			ScrollBarImageColor3 = C.line,
+			CanvasSize = UDim2.new(),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			ElasticBehavior = Enum.ElasticBehavior.Never,
 		}, panel)
+		make("UIGridLayout", {
+			CellSize = UDim2.new(0.5, -4, 0, CELL_H),
+			CellPadding = UDim2.fromOffset(GAP, GAP),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, scroll)
 		self.panels[i] = panel
+		self.scrolls[i] = scroll
 
-		if #tab.rows > CFG.MaxRowsPerTab then
-			warn(("[FMenu] tab '%s' has %d rows, only %d fit"):format(tab.name, #tab.rows, CFG.MaxRowsPerTab))
-		end
 		for r, data in ipairs(tab.rows) do
-			if r <= CFG.MaxRowsPerTab then
-				self:_buildRow(data, r, panel, i)
-			end
+			self:_buildRow(data, r, scroll, i)
 		end
 	end
+	self.built = true
+	self:_applyHeight(false)
 	self:refreshStatus()
 end
 
@@ -576,10 +591,9 @@ function UI:_buildRow(data, order, parent, tabIndex)
 end
 
 ---------------------------------------------------------------------
--- live status (dot, counts, tab dots)
+-- live status (status dot, enabled count on each tab)
 ---------------------------------------------------------------------
 function UI:refreshStatus()
-	local total = 0
 	for i, rows in ipairs(self.tabRows) do
 		local n = 0
 		for _, row in ipairs(rows) do
@@ -587,11 +601,10 @@ function UI:refreshStatus()
 				n += 1
 			end
 		end
-		total += n
-		self.tabDots[i].Visible = n > 0
+		local badge = self.tabBadges[i]
+		badge.Text = tostring(n)
+		badge.Visible = n > 0
 	end
-	self.count.Text = ("%d on"):format(total)
-	self.count.TextColor3 = total > 0 and C.good or C.muted
 end
 
 function UI:_applyStatus(open)
@@ -695,20 +708,74 @@ end
 ---------------------------------------------------------------------
 -- tabs
 ---------------------------------------------------------------------
+-- The menu is exactly as tall as the active tab needs: header, tab bar, its rows, hint line. Rows sit in
+-- a two column grid, so 7 rows take 4 grid lines. When that would run off the screen the panel is capped
+-- and its rows scroll instead.
+-- returns panelHeight, totalMenuHeight, naturalPanelHeight
+function UI:_layoutFor(i)
+	local n = #(self.tabRows[i] or {})
+	local lines = math.ceil(n / 2)
+	local natural = lines > 0 and (lines * CELL_H + (lines - 1) * GAP) or 0
+	local vpY = self.gui.AbsoluteSize.Y
+	if vpY <= 0 then
+		local cam = workspace.CurrentCamera
+		vpY = cam and cam.ViewportSize.Y or 720
+	end
+	local maxTotal = (vpY - CFG.TopOffset - CFG.ScreenMargin) / self.scale.Scale
+	local panelH = natural
+	if natural + CHROME > maxTotal then
+		panelH = math.max(CELL_H, maxTotal - CHROME)
+	end
+	return panelH, panelH + CHROME, natural
+end
+
+-- sizes tab i's panel, returns the total menu height that goes with it
+function UI:_sizePanel(i)
+	local panelH, total, natural = self:_layoutFor(i)
+	self.panels[i].Size = UDim2.fromOffset(PANEL_W, panelH)
+	self.scrolls[i].ScrollBarThickness = natural > panelH and 3 or 0
+	return total
+end
+
+-- re-fits the menu to the active tab (after build, scale change or a viewport resize)
+function UI:_applyHeight(animate)
+	local s = self.state
+	local total = self:_sizePanel(s.tab)
+	self.expanded = Vector2.new(CFG.Width, total)
+	if s.minimized then
+		self.body.Size = UDim2.fromOffset(CFG.Width, total) -- hidden, root keeps the pill size
+		return
+	end
+	self.A.resize(self.refs, self.expanded, animate)
+end
+
 function UI:_selectTab(i)
 	local s = self.state
-	if i == s.tab then
+	if i == s.tab or s.minimized then
 		return
 	end
 	self:_closePop(true)
+	local prev = s.tab
+	local dir = i > prev and 1 or -1 -- moving right brings the new panel in from the right
 	s.tab = i
 	for idx, btn in ipairs(self.tabButtons) do
 		self.A.styleTab(btn, idx == i, C)
-		if idx ~= i then
-			self.panels[idx].Visible = false
+		if idx ~= i and idx ~= prev then
+			self.panels[idx].Visible = false -- leftover from a rapid double switch
 		end
 	end
-	self.A.showPanel(self.panels[i], PANEL_POS)
+
+	self.scrolls[i].CanvasPosition = Vector2.zero
+	self.expanded = Vector2.new(CFG.Width, self:_sizePanel(i))
+
+	local oldPanel = self.panels[prev]
+	self.A.slideOut(oldPanel, PANEL_POS, -dir * CFG.SlideDistance).Completed:Once(function()
+		if s.tab ~= prev then
+			oldPanel.Visible = false
+		end
+	end)
+	self.A.slideIn(self.panels[i], PANEL_POS, dir * CFG.SlideDistance)
+	self.A.resize(self.refs, self.expanded, true)
 	self:_startCountdown()
 end
 
@@ -752,7 +819,7 @@ function UI:expand()
 	s.token += 1
 	self.body.Visible = true
 	self:_applyStatus(true)
-	self.A.expand(self.refs, CFG.Expanded, LEAD_EXP)
+	self.A.expand(self.refs, self.expanded, LEAD_EXP)
 	self:_startCountdown()
 end
 
@@ -767,6 +834,9 @@ end
 -- called by Functionality (scale / auto-hide features)
 function UI:setScale(scale)
 	self.scale.Scale = scale
+	if self.built then
+		self:_applyHeight(true) -- the screen cap depends on the scale
+	end
 end
 
 function UI:setAutoHide(enabled, seconds)
@@ -789,6 +859,13 @@ function UI:_bindInput()
 
 	table.insert(conns, self.header.MouseButton1Click:Connect(function()
 		self:toggle()
+	end))
+
+	-- screen resized / rotated: re-check whether the active tab still fits
+	table.insert(conns, self.gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if self.built then
+			self:_applyHeight(true)
+		end
 	end))
 
 	-- any press on the scrim (everything outside the popover) closes it

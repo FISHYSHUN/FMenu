@@ -28,7 +28,7 @@ local NDS = {
 }
 local features = NDS.features
 
--- disaster HUD: finds visible on-screen text that names a disaster and shows it top left
+-- disaster HUD: finds visible on-screen text that names a disaster and shows it top left (drag it to move it)
 do
 	local label, enabled, interval, acc = nil, false, 0.5, 0
 	local function scan()
@@ -52,20 +52,9 @@ do
 		return nil
 	end
 	features.ndStatus = {
-		init = function(_ctx, hud)
-			label = Util.make("TextLabel", {
-				Name = "DisasterStatus",
-				Position = UDim2.fromOffset(12, 30),
-				Size = UDim2.fromOffset(320, 18),
-				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamBold,
-				TextSize = 14,
-				TextColor3 = Color3.fromRGB(255, 214, 64),
-				TextStrokeTransparency = 0.5,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				Visible = false,
-				Text = "",
-			}, hud)
+		init = function(ctx)
+			label = ctx.hudLabel("DisasterStatus", Color3.fromRGB(255, 214, 64), Enum.Font.GothamBold)
+			ctx.draggable(label, "DisasterStatus", "left", 1)
 		end,
 		set = function(on, v)
 			enabled = on

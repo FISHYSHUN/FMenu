@@ -45,11 +45,29 @@ function Animations.styleTab(button, active, colors)
 	})
 end
 
-function Animations.showPanel(panel, restPos)
+-- tab switch: the new panel slides in from `dx` pixels away while the old one slides out the other way.
+-- dx > 0 means the new panel comes from the right (moving to a tab further right).
+function Animations.slideIn(panel, restPos, dx)
 	panel.GroupTransparency = 1
-	panel.Position = restPos + UDim2.fromOffset(0, 5)
+	panel.Position = restPos + UDim2.fromOffset(dx, 0)
 	panel.Visible = true
-	Animations.tween(panel, "ease", { GroupTransparency = 0, Position = restPos })
+	return Animations.tween(panel, "ease", { GroupTransparency = 0, Position = restPos })
+end
+
+function Animations.slideOut(panel, restPos, dx)
+	return Animations.tween(panel, "ease", { GroupTransparency = 1, Position = restPos + UDim2.fromOffset(dx, 0) })
+end
+
+-- menu height follows the active tab. refs = { root, body }. animate = false snaps (no tween at all).
+function Animations.resize(refs, size, animate)
+	local goal = UDim2.fromOffset(size.X, size.Y)
+	if not animate then
+		refs.root.Size = goal
+		refs.body.Size = goal
+		return
+	end
+	Animations.tween(refs.body, "ease", { Size = goal })
+	return Animations.tween(refs.root, "ease", { Size = goal })
 end
 
 -- minimize / expand ---------------------------------------------------

@@ -5,7 +5,13 @@
 -- row = { id, label, slider (popover title), value (0-100), on, fmt? }
 --   id must match a feature in Functionality.lua or in the game module's `features` table.
 --   fmt turns the 0-100 slider value into what the user sees (Util.range(lo, hi, unit)).
---   max 6 rows per tab (UI.CONFIG.MaxRowsPerTab).
+--   any number of rows per tab: the menu grows to fit the tab and scrolls if the screen is too short.
+--
+-- Recognising a game (Games.index entry):
+--   places    = exact PlaceIds
+--   universes = GameIds (game.GameId). One universe covers every place of an experience, which is what
+--               you want for games that teleport you between a lobby and match places (Rivals).
+--   names     = lowercase fragments of game.Name, last resort
 --
 -- To add a game: print(game.PlaceId, game.GameId) in the executor, add an entry to Games.index and a
 -- module in src/games/ that returns { name, tab = { name, rows }, features = { ... } }.
@@ -18,7 +24,9 @@ local Games = {}
 
 Games.index = {
 	mm2 = { module = "games/MM2", places = { 142823291 }, names = { "murder mystery" } },
-	rivals = { module = "games/Rivals", places = { 17625359962 }, names = { "rivals" } },
+	-- the lobby is 17625359962, matches run in other places of the same universe (GameId from memory,
+	-- check it with print(game.GameId) if the tab still does not show up)
+	rivals = { module = "games/Rivals", places = { 17625359962 }, universes = { 6035872082 }, names = { "rivals" } },
 	nds = { module = "games/NaturalDisasters", places = { 189707 }, names = { "natural disaster" } },
 }
 
@@ -39,16 +47,17 @@ local baseTabs = {
 		{ id = "fly", label = "Fly", slider = "Fly speed", value = 35, on = false, fmt = range(20, 200) },
 		{ id = "clicktp", label = "Ctrl+click TP", slider = "Unused", value = 0, on = false },
 	} },
+	-- Visual is only for things drawn on other players. World / camera / lighting settings live in Utility.
 	{ name = "Visual", rows = {
 		{ id = "esp", label = "Player ESP", slider = "Max distance", value = 50, on = false, fmt = range(100, 2000, " st") },
 		{ id = "tracers", label = "Tracers", slider = "Thickness", value = 0, on = false, fmt = range(1, 4, "px") },
-		{ id = "fov", label = "Field of view", slider = "FOV (40-120)", value = 50, on = false, fmt = range(40, 120) },
-		{ id = "brightness", label = "Brightness", slider = "Brightness (0-6)", value = 35, on = false, fmt = range(0, 6) },
-		{ id = "fullbright", label = "Fullbright", slider = "Ambient level", value = 100, on = false, fmt = range(50, 100, "%") },
-		{ id = "nofog", label = "No fog", slider = "Unused", value = 0, on = false },
 	} },
 	{ name = "Utility", rows = {
 		{ id = "timeOfDay", label = "Time of day", slider = "Hour (0-24)", value = 60, on = false, fmt = range(0, 24, "h") },
+		{ id = "brightness", label = "Brightness", slider = "Brightness (0-6)", value = 35, on = false, fmt = range(0, 6) },
+		{ id = "fullbright", label = "Fullbright", slider = "Ambient level", value = 100, on = false, fmt = range(50, 100, "%") },
+		{ id = "nofog", label = "No fog", slider = "Unused", value = 0, on = false },
+		{ id = "fov", label = "Field of view", slider = "FOV (40-120)", value = 50, on = false, fmt = range(40, 120) },
 		{ id = "lowgfx", label = "Low graphics", slider = "Unused", value = 0, on = false },
 		{ id = "antiafk", label = "Anti-AFK", slider = "Unused", value = 0, on = true },
 	} },
@@ -58,10 +67,15 @@ local baseTabs = {
 	} },
 }
 
-local function matchGame(placeId, gameName)
+local function matchGame(placeId, gameId, gameName)
 	for key, entry in pairs(Games.index) do
-		for _, id in ipairs(entry.places) do
+		for _, id in ipairs(entry.places or {}) do
 			if id == placeId then
+				return key
+			end
+		end
+		for _, id in ipairs(entry.universes or {}) do
+			if id == gameId then
 				return key
 			end
 		end
@@ -81,7 +95,9 @@ end
 
 -- returns { name, tabs, features }
 function Games.resolve(placeId, gameName)
-	local key = matchGame(placeId, gameName)
+	local gameId = game.GameId
+	local key = matchGame(placeId, gameId, gameName)
+	print(("[FMenu] place %s  universe %s  ->  %s"):format(tostring(placeId), tostring(gameId), key or "universal"))
 	local def = nil
 	if key then
 		local ok, mod = pcall(import, Games.index[key].module)

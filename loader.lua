@@ -1,6 +1,9 @@
 -- FMenu loader
 -- run:  loadstring(game:HttpGet("https://raw.githubusercontent.com/FISHYSHUN/FMenu/main/loader.lua"))()
 --
+-- Survives teleports: queues itself with queue_on_teleport so the menu is rebuilt (and the right game tab
+-- picked) in every place you land in, e.g. Rivals lobby -> match.
+--
 -- Every module in src/ is fetched from the same branch, executed once and cached. Each module gets
 -- `import` as its first vararg (`local import = ...`). Re-running the loader tears down the old menu
 -- first, so you can execute it again after pushing changes.
@@ -39,6 +42,25 @@ end
 
 if not game:IsLoaded() then
 	game.Loaded:Wait()
+end
+
+-- Some games (Rivals) move you between places: the lobby is one place, every match another. A teleport
+-- kills every running script, so queue this loader to run again as soon as the next place loads.
+-- (FMENU_BOOTED stops duplicate queued copies from building the menu more than once per server.)
+-- Opt out with getgenv().FMENU_NO_REQUEUE = true before running the loader.
+local queueTp = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+if queueTp and not genv.FMENU_NO_REQUEUE then
+	local loaderUrl = genv.FMENU_LOADER or "https://raw.githubusercontent.com/FISHYSHUN/FMenu/main/loader.lua"
+	local lines = {
+		"local g = (getgenv and getgenv()) or _G",
+		"if g.FMENU_BOOTED == game.JobId then return end",
+		"g.FMENU_BOOTED = game.JobId",
+	}
+	if genv.FMENU_BASE then
+		lines[#lines + 1] = ("g.FMENU_BASE = %q"):format(genv.FMENU_BASE)
+	end
+	lines[#lines + 1] = ("loadstring(game:HttpGet(%q))()"):format(loaderUrl)
+	pcall(queueTp, table.concat(lines, "\n"))
 end
 
 local Animations = import("Animations")
