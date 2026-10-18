@@ -34,6 +34,7 @@ local conn = nil
 local hudConns = {}
 local positions = {} -- hud key -> Vector2 (where the user dragged it), survives toggling
 local dragging = nil -- { info, key, input, grab }
+local hudLocked, notifyOn = false, true
 local huds = {} -- every draggable label, so they can be pulled back on screen after a resize
 
 local function isPress(input)
@@ -82,7 +83,7 @@ function Functionality.draggable(obj, key, side, row)
 	-- text changes resize the label: keep right-side labels flush and everything on screen
 	obj:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
 	obj.InputBegan:Connect(function(input)
-		if isPress(input) then
+		if isPress(input) and not hudLocked then
 			dragging = { info = info, key = key, input = input, grab = Util.pointer(input) - obj.AbsolutePosition }
 		end
 	end)
@@ -471,6 +472,9 @@ do
 				maxDistance = 1000,
 				resolve = function(plr, char, dist)
 					local hum = Util.humanoid(char)
+					if Util.flags.hideTeam and Util.isTeammate(plr) then
+						return nil
+					end
 					local color = plr.Team and plr.TeamColor.Color or Color3.fromRGB(255, 90, 90)
 					return color, ("%s  %dm  %dhp"):format(plr.DisplayName, math.floor(dist), math.floor(hum and hum.Health or 0))
 				end,
@@ -524,8 +528,8 @@ do
 			local origin = Vector2.new(vp.X / 2, vp.Y)
 			local used = 0
 			for _, plr in ipairs(Players:GetPlayers()) do
-				if plr ~= lp and Util.alive(plr.Character) then
-					local root = Util.root(plr.Character)
+				if plr ~= lp and Util.isAlive(plr.Character) and not (Util.flags.hideTeam and Util.isTeammate(plr)) then
+					local root = Util.rootOf(plr.Character)
 					if root then
 						local p, onScreen = cam:WorldToViewportPoint(root.Position)
 						if onScreen then
@@ -719,6 +723,251 @@ do
 end
 
 ---------------------------------------------------------------------
+-- more universal features
+---------------------------------------------------------------------
+
+-- coords / speedometer: HUD labels (drag to move)
+do
+	local label, enabled, acc = nil, false, 0
+	features.coords = {
+		init = function()
+			label = statLabel("Coords", 3)
+		end,
+		set = function(on)
+			enabled = on
+			label.Visible = on
+		end,
+		step = function(dt)
+			if not enabled then
+				return
+			end
+			acc += dt
+			if acc < 0.1 then
+				return
+			end
+			acc = 0
+			local root = Util.root()
+			if root then
+				local p = root.Position
+				label.Text = ("%d, %d, %d"):format(math.floor(p.X), math.floor(p.Y), math.floor(p.Z))
+			end
+		end,
+	}
+end
+
+do
+	local label, enabled, acc = nil, false, 0
+	features.speedo = {
+		init = function()
+			label = statLabel("Speed", 4)
+		end,
+		set = function(on)
+			enabled = on
+			label.Visible = on
+		end,
+		step = function(dt)
+			if not enabled then
+				return
+			end
+			acc += dt
+			if acc < 0.1 then
+				return
+			end
+			acc = 0
+			local root = Util.root()
+			if root then
+				local v = root.AssemblyLinearVelocity
+				label.Text = ("%d st/s"):format(math.floor(Vector3.new(v.X, 0, v.Z).Magnitude + 0.5))
+			end
+		end,
+	}
+end
+
+-- bunny hop: hold space to keep jumping
+do
+	local enabled = false
+	features.bhop = {
+		set = function(on)
+			enabled = on
+		end,
+		step = function()
+			if not enabled or UserInputService:GetFocusedTextBox() then
+				return
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+				local hum = Util.humanoid()
+				if hum and hum.FloorMaterial ~= Enum.Material.Air then
+					hum:ChangeState(Enum.HumanoidStateType.Jumping)
+				end
+			end
+		end,
+	}
+end
+
+-- gravity: games like to reset it, so it is re-applied every frame while on
+do
+	local orig, enabled, target = nil, false, 196.2
+	features.gravity = {
+		set = function(on, v)
+			if on and not enabled then
+				orig = workspace.Gravity
+			end
+			enabled = on
+			target = lerp(20, 196.2, v)
+			if on then
+				workspace.Gravity = target
+			elseif orig then
+				workspace.Gravity = orig
+				orig = nil
+			end
+		end,
+		step = function()
+			if enabled and workspace.Gravity ~= target then
+				workspace.Gravity = target
+			end
+		end,
+	}
+end
+
+-- anti-void: remembers the last place you stood on, sends you back if you fall out of the map
+do
+	local enabled, safe = false, nil
+	features.antivoid = {
+		set = function(on)
+			enabled = on
+			safe = nil
+		end,
+		step = function()
+			if not enabled then
+				return
+			end
+			local root, hum = Util.root(), Util.humanoid()
+			if not root or not hum or hum.Health <= 0 then
+				return
+			end
+			if hum.FloorMaterial ~= Enum.Material.Air then
+				safe = root.CFrame
+			end
+			if safe and root.Position.Y < workspace.FallenPartsDestroyHeight + 80 then
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.CFrame = safe + Vector3.new(0, 5, 0)
+			end
+		end,
+	}
+end
+
+-- box ESP: boxes that scale with distance, honours "hide teammates"
+do
+	local esp
+	features.boxes = {
+		init = function()
+			esp = ESP.new({
+				make = ESP.box,
+				maxDistance = 1000,
+				resolve = function(plr)
+					if Util.flags.hideTeam and Util.isTeammate(plr) then
+						return nil
+					end
+					return plr.Team and plr.TeamColor.Color or Color3.fromRGB(255, 90, 90), plr.DisplayName
+				end,
+			})
+		end,
+		set = function(on, v)
+			esp:setDistance(lerp(100, 2000, v))
+			esp:setEnabled(on)
+		end,
+		step = function(dt)
+			esp:step(dt)
+		end,
+		destroy = function()
+			if esp then
+				esp:setEnabled(false)
+			end
+		end,
+	}
+end
+
+-- hide teammates: player ESP, boxes and tracers skip your team
+features.hideteam = {
+	set = function(on)
+		Util.flags.hideTeam = on
+	end,
+}
+
+-- hold C to zoom the camera (value = zoom FOV)
+do
+	local enabled, zoomFov, base = false, 30, nil
+	local function restore()
+		local cam = workspace.CurrentCamera
+		if base and cam then
+			cam.FieldOfView = base
+		end
+		base = nil
+	end
+	features.zoom = {
+		set = function(on, v)
+			enabled = on
+			zoomFov = lerp(10, 60, v)
+			if not on then
+				restore()
+			end
+		end,
+		step = function()
+			local cam = workspace.CurrentCamera
+			if not cam then
+				return
+			end
+			if enabled and UserInputService:IsKeyDown(Enum.KeyCode.C) and not UserInputService:GetFocusedTextBox() then
+				base = base or cam.FieldOfView
+				cam.FieldOfView = zoomFov
+			else
+				restore()
+			end
+		end,
+		destroy = restore,
+	}
+end
+
+-- unlock how far the camera can zoom out
+do
+	local orig = nil
+	features.maxzoom = {
+		set = function(on, v)
+			if on then
+				orig = orig or lp.CameraMaxZoomDistance
+				lp.CameraMaxZoomDistance = lerp(20, 1000, v)
+			elseif orig then
+				lp.CameraMaxZoomDistance = orig
+				orig = nil
+			end
+		end,
+	}
+end
+
+-- auto clicker: hold left mouse and it clicks at the slider rate
+do
+	local enabled, interval, last = false, 0.1, 0
+	features.autoclick = {
+		set = function(on, v)
+			enabled = on
+			interval = 1 / lerp(4, 30, v)
+		end,
+		step = function()
+			if not enabled or not mouse1click or UserInputService:GetFocusedTextBox() then
+				return
+			end
+			if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+				local now = os.clock()
+				if now - last >= interval then
+					last = now
+					mouse1click()
+				end
+			end
+		end,
+	}
+end
+
+---------------------------------------------------------------------
 -- menu features
 ---------------------------------------------------------------------
 
@@ -726,6 +975,23 @@ end
 features.reducedMotion = {
 	set = function(on, _v, c)
 		c.animations.Enabled = not on
+	end,
+}
+
+-- hudlock: stops HUD labels from being dragged by accident
+features.hudlock = {
+	set = function(on)
+		hudLocked = on
+		if on then
+			dragging = nil
+		end
+	end,
+}
+
+-- notifs: off = no toasts (role alerts etc. stay silent)
+features.notifs = {
+	set = function(on)
+		notifyOn = on
 	end,
 }
 
@@ -740,7 +1006,7 @@ features.autohide = {
 -- toasts
 ---------------------------------------------------------------------
 function Functionality.notify(text, color)
-	if not toasts then
+	if not toasts or not notifyOn then
 		return
 	end
 	local label = make("TextLabel", {
@@ -842,12 +1108,18 @@ function Functionality.init(c)
 	end
 
 	conn = RunService.RenderStepped:Connect(function(dt)
+		local now = os.clock()
 		for id, def in pairs(features) do
-			if def.step and not def._stepFailed then
+			if def.step and now >= (def._retryAt or 0) then
 				local ok, err = pcall(def.step, dt, ctx)
 				if not ok then
-					def._stepFailed = true
-					warn(("[FMenu] feature '%s' step failed: %s"):format(id, tostring(err)))
+					-- back off for a second and try again: one bad frame must never switch a feature off for good
+					def._retryAt = now + 1
+					local msg = tostring(err)
+					if def._lastErr ~= msg then
+						def._lastErr = msg
+						warn(("[FMenu] feature '%s' step failed (retrying): %s"):format(id, msg))
+					end
 				end
 			end
 		end
