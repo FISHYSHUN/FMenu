@@ -605,7 +605,7 @@ do
 	end
 	features.tracers = {
 		set = function(on, v, _c, o)
-			ESP.configure(style, o)
+			ESP.applyStyle(style, o)
 			enabled = on
 			thickness = lerp(1, 4, v)
 			if not on then
