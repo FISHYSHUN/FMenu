@@ -41,17 +41,19 @@ src/games/NaturalDisasters.lua
 
 | Tab | Rows |
 | --- | --- |
-| Main | overlay, crosshair, fps, ping, clock, compact |
-| Player | speed, high jump, infinite jump, noclip, fly, ctrl+click teleport |
-| Visual | player ESP, tracers |
-| Utility | time of day, brightness, fullbright, no fog, fov, low graphics, anti-AFK |
-| Config | reduced motion, auto-hide |
+| Main | overlay, crosshair, fps, ping, clock, coordinates, speedometer, compact |
+| Player | speed, high jump, infinite jump, bunny hop, noclip, fly, ctrl+click teleport, gravity, anti-void |
+| Visual | player ESP, box ESP, tracers, hide teammates |
+| Utility | time of day, brightness, fullbright, no fog, fov, hold-C zoom, max zoom out, auto-clicker, low graphics, anti-AFK |
+| Config | reduced motion, auto-hide, lock HUD, notifications |
 
 ## Game tabs
 
-- **MM2**: role ESP, role alerts, gun drop ESP, auto grab gun, coin collect
-- **Rivals**: aim assist (hold right mouse), FOV ring, triggerbot, enemy ESP, visible-only, team check
-- **Natural Disaster Survival**: disaster HUD, sky platform, fall speed limit
+- **MM2**: role ESP, role alerts, gun drop ESP, auto grab gun, coin collect, murderer distance readout, watch murderer
+- **Rivals**: aim assist (gentle, speed limited pull) and aim lock (sticks to a target, snap or smoothed), both on
+  right mouse and lock wins if both are on; FOV ring, aim part (head / chest / closest), prediction, triggerbot,
+  enemy ESP, target info, visible-only, team check
+- **Natural Disaster Survival**: disaster HUD, disaster alert, sky platform, air floor, fall speed limit
 
 ## Adding a game
 
