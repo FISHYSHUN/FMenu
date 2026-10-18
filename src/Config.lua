@@ -115,6 +115,9 @@ function Config.apply(tabs, saved)
 				if type(s.value) == "number" then
 					data.value = math.clamp(math.floor(s.value + 0.5), 0, 100)
 				end
+				if type(s.bind) == "string" then
+					data.bind = s.bind -- UI checks it is a real key
+				end
 				if type(s.opts) == "table" then
 					data.optv = s.opts -- UI checks every key against the row's option definitions
 				end
