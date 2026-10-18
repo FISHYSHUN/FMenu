@@ -396,14 +396,29 @@ end
 -- infjump: jump again in the air
 do
 	local bag = Util.bag()
+	local cfg, used = {}, 0
 	features.infjump = {
-		set = function(on)
+		set = function(on, _v, _c, o)
+			cfg = o
+			used = 0
 			bag:clean()
 			if on then
 				bag:add(UserInputService.JumpRequest:Connect(function()
 					local hum = Util.humanoid()
-					if hum then
-						hum:ChangeState(Enum.HumanoidStateType.Jumping)
+					if not hum or hum.FloorMaterial ~= Enum.Material.Air then
+						return -- on the ground the game's own jump does the work
+					end
+					local limit = cfg.limit or 0
+					if limit > 0 and used >= limit then
+						return
+					end
+					used += 1
+					hum:ChangeState(Enum.HumanoidStateType.Jumping)
+				end))
+				bag:add(RunService.Heartbeat:Connect(function()
+					local hum = Util.humanoid()
+					if hum and hum.FloorMaterial ~= Enum.Material.Air then
+						used = 0
 					end
 				end))
 			end
@@ -653,9 +668,11 @@ do
 	}
 end
 
--- fov: value = 40 to 120
+-- fov: value = 40 to 120. Re-applied every frame because games love to reset it (sprint, scopes...)
+-- camState is shared with the zoom feature so the two do not fight.
+local camState = { zooming = false }
 do
-	local original = 70
+	local original, enabled, target = 70, false, 70
 	features.fov = {
 		init = function()
 			local cam = workspace.CurrentCamera
@@ -664,9 +681,23 @@ do
 			end
 		end,
 		set = function(on, v)
+			enabled = on
+			target = 40 + v * 0.8
+			local cam = workspace.CurrentCamera
+			if cam and not camState.zooming then
+				cam.FieldOfView = on and target or original
+			end
+		end,
+		step = function()
+			local cam = workspace.CurrentCamera
+			if enabled and cam and not camState.zooming and math.abs(cam.FieldOfView - target) > 0.01 then
+				cam.FieldOfView = target
+			end
+		end,
+		destroy = function()
 			local cam = workspace.CurrentCamera
 			if cam then
-				cam.FieldOfView = on and (40 + v * 0.8) or original
+				cam.FieldOfView = original
 			end
 		end,
 	}
@@ -886,10 +917,10 @@ end
 
 -- bunny hop: hold space to keep jumping
 do
-	local enabled = false
+	local enabled, cfg = false, {}
 	features.bhop = {
-		set = function(on)
-			enabled = on
+		set = function(on, _v, _c, o)
+			enabled, cfg = on, o
 		end,
 		step = function()
 			if not enabled or UserInputService:GetFocusedTextBox() then
@@ -899,6 +930,16 @@ do
 				local hum = Util.humanoid()
 				if hum and hum.FloorMaterial ~= Enum.Material.Air then
 					hum:ChangeState(Enum.HumanoidStateType.Jumping)
+					-- every hop adds a bit of speed, up to the cap
+					local root, gain = Util.root(), cfg.gain or 0
+					if root and gain > 0 then
+						local v = root.AssemblyLinearVelocity
+						local h = Vector3.new(v.X, 0, v.Z)
+						if h.Magnitude > 1 and h.Magnitude < (cfg.cap or 80) then
+							local nh = h * (1 + gain)
+							root.AssemblyLinearVelocity = Vector3.new(nh.X, v.Y, nh.Z)
+						end
+					end
 				end
 			end
 		end,
@@ -932,10 +973,10 @@ end
 
 -- anti-void: remembers the last place you stood on, sends you back if you fall out of the map
 do
-	local enabled, safe = false, nil
+	local enabled, safe, cfg = false, nil, {}
 	features.antivoid = {
-		set = function(on)
-			enabled = on
+		set = function(on, _v, _c, o)
+			enabled, cfg = on, o
 			safe = nil
 		end,
 		step = function()
@@ -949,9 +990,9 @@ do
 			if hum.FloorMaterial ~= Enum.Material.Air then
 				safe = root.CFrame
 			end
-			if safe and root.Position.Y < workspace.FallenPartsDestroyHeight + 80 then
+			if safe and root.Position.Y < workspace.FallenPartsDestroyHeight + (cfg.depth or 80) then
 				root.AssemblyLinearVelocity = Vector3.zero
-				root.CFrame = safe + Vector3.new(0, 5, 0)
+				root.CFrame = safe + Vector3.new(0, cfg.lift or 5, 0)
 			end
 		end,
 	}
@@ -989,34 +1030,46 @@ do
 	}
 end
 
--- hold C to zoom the camera (value = zoom FOV)
+-- zoom: hold a key (option, default C) to zoom in. value = zoom FOV. Option: smooth transition.
 do
-	local enabled, zoomFov, base = false, 30, nil
+	local enabled, zoomFov, base, cfg = false, 30, nil, {}
 	local function restore()
 		local cam = workspace.CurrentCamera
 		if base and cam then
 			cam.FieldOfView = base
 		end
 		base = nil
+		camState.zooming = false
 	end
 	features.zoom = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			enabled = on
 			zoomFov = lerp(10, 60, v)
+			cfg = o
 			if not on then
 				restore()
 			end
 		end,
-		step = function()
+		step = function(dt)
 			local cam = workspace.CurrentCamera
 			if not cam then
 				return
 			end
-			if enabled and UserInputService:IsKeyDown(Enum.KeyCode.C) and not UserInputService:GetFocusedTextBox() then
+			local held = enabled
+				and not UserInputService:GetFocusedTextBox()
+				and UserInputService:IsKeyDown(Enum.KeyCode[cfg.key or "C"])
+			local smooth = cfg.smooth ~= false
+			local k = 1 - math.exp(-dt * 14)
+			if held then
 				base = base or cam.FieldOfView
-				cam.FieldOfView = zoomFov
-			else
-				restore()
+				camState.zooming = true
+				cam.FieldOfView = smooth and (cam.FieldOfView + (zoomFov - cam.FieldOfView) * k) or zoomFov
+			elseif base then
+				if smooth and math.abs(cam.FieldOfView - base) > 0.5 then
+					cam.FieldOfView += (base - cam.FieldOfView) * k
+				else
+					restore()
+				end
 			end
 		end,
 		destroy = restore,
@@ -1167,10 +1220,26 @@ function Functionality.notify(text, color)
 	if not toasts or not notifyOn then
 		return
 	end
+	-- the same message again replaces the old toast, and at most 5 are shown at once
+	local shownToasts = {}
+	for _, ch in ipairs(toasts:GetChildren()) do
+		if ch:IsA("TextLabel") then
+			if ch.Text == text then
+				ch:Destroy()
+			else
+				shownToasts[#shownToasts + 1] = ch
+			end
+		end
+	end
+	while #shownToasts >= 5 do
+		table.remove(shownToasts, 1):Destroy()
+	end
+	local alpha = math.max((ctx.ui and ctx.ui.alpha) or 1, 0.4) -- toasts follow the menu opacity
 	local label = make("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 26),
 		BackgroundColor3 = Color3.fromRGB(22, 24, 31),
-		BackgroundTransparency = 0.15,
+		BackgroundTransparency = 1 - 0.85 * alpha,
+		TextStrokeTransparency = 0.7,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamMedium,
 		TextSize = 14,
