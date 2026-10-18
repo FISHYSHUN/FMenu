@@ -1033,12 +1033,28 @@ function UI:_resetRow(row, animate)
 end
 
 function UI:resetAll()
+	self.bulk = true -- features that apply presets stay out of the way while everything is put back
 	for _, row in ipairs(self.rowList) do
 		if not row.button then
 			self:_resetRow(row, true)
 		end
 	end
+	self.bulk = false
 	self:refreshStatus()
+end
+
+-- sets one option (e.g. "mode") on every row that has it
+function UI:setOptionAll(key, value)
+	self.bulk = true
+	for _, row in ipairs(self.rowList) do
+		for _, d in ipairs(row.optDefs) do
+			if d.key == key and row.optv[key] ~= value then
+				row.optv[key] = value -- in place: features hold a reference to this table
+				self.onChanged(row.id, row.on, row.value, row.optv)
+			end
+		end
+	end
+	self.bulk = false
 end
 
 ---------------------------------------------------------------------
