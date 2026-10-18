@@ -131,11 +131,13 @@ local Rivals = {
 	tab = { name = "Rivals", rows = {
 		{ header = "Aiming" },
 		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%"), opts = {
+			Util.modeOption(),
 			{ type = "slider", key = "dead", label = "Dead zone", min = 0.1, max = 3, step = 0.1, unit = " deg", default = 0.4 },
 			{ type = "slider", key = "falloff", label = "Edge falloff", min = 0, max = 1, step = 0.05, pct = true, default = 0.6 },
 		} },
-		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end },
+		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end, opts = { Util.modeOption() } },
 		{ id = "rvFov", label = "FOV ring", slider = "Radius", value = 40, on = false, fmt = range(40, 400, "px"), opts = {
+			Util.modeOption(),
 			{ type = "slider", key = "thickness", label = "Thickness", min = 1, max = 5, step = 0.5, unit = "px", default = 1.5 },
 			{ type = "slider", key = "alpha", label = "Opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 0.65 },
 			{ type = "toggle", key = "tint", label = "Custom color", default = false },
@@ -145,6 +147,7 @@ local Rivals = {
 		{ id = "rvPred", label = "Prediction", slider = "Lead amount", value = 30, on = false, fmt = range(0, 100, "%") },
 		{ header = "Shooting & ESP" },
 		{ id = "rvTrigger", label = "Triggerbot", slider = "Reaction delay", value = 15, on = false, fmt = range(0, 300, "ms"), opts = {
+			Util.modeOption(),
 			{ type = "slider", key = "interval", label = "Time between clicks", min = 0.05, max = 0.5, step = 0.01, unit = "s", default = 0.12 },
 		} },
 		{ id = "rvEsp", label = "Enemy ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st"), opts = ESP.options("player") },
@@ -249,7 +252,7 @@ do
 	features.rvAim = {
 		set = function(on, v, _c, o)
 			aim.assist = on
-			aim.strength = v / 100
+			aim.strength = v / 100 * Util.level(o.mode).aim
 			aim.dead = o.dead or 0.4
 			aim.falloff = o.falloff or 0.6
 			refresh()
@@ -260,9 +263,9 @@ do
 		end,
 	}
 	features.rvLock = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			aim.lock = on
-			aim.smooth = v
+			aim.smooth = math.max(v, Util.level(o.mode).smooth)
 			refresh()
 		end,
 		destroy = function()
@@ -297,7 +300,7 @@ do
 			stroke.Thickness = o.thickness or 1.5
 			stroke.Transparency = 1 - (o.alpha or 0.65)
 			stroke.Color = o.tint and Color3.fromHSV(o.hue or 0, 0.85, 1) or Color3.fromRGB(255, 255, 255)
-			shared.fov = Util.lerp(40, 400, v)
+			shared.fov = Util.lerp(40, 400, v) * Util.level(o.mode).fov
 			ring.Size = UDim2.fromOffset(shared.fov * 2, shared.fov * 2)
 			ring.Visible = on
 		end,
@@ -340,12 +343,14 @@ end
 
 -- triggerbot: clicks while the crosshair is on an enemy. value = reaction delay 0 to 300 ms
 do
-	local enabled, delay, acquiredAt, lastClick, cfg = false, 0.05, nil, 0, {}
+	local enabled, delay, acquiredAt, lastClick, cfg, jitter, extra = false, 0.05, nil, 0, {}, 0, 0
 	features.rvTrigger = {
 		set = function(on, v, _c, o)
 			enabled = on
 			cfg = o
-			delay = Util.lerp(0, 300, v) / 1000
+			local L = Util.level(o.mode)
+			delay = math.max(Util.lerp(0, 300, v), L.delay) / 1000
+			jitter = L.jitter / 1000
 			if not on then
 				acquiredAt = nil
 			end
@@ -359,8 +364,11 @@ do
 			local plr = hit and Util.playerFromPart(hit.Instance)
 			if plr and isEnemy(plr) and Util.isAlive(plr.Character) then
 				local now = os.clock()
-				acquiredAt = acquiredAt or now
-				if now - acquiredAt >= delay and now - lastClick > (cfg.interval or 0.12) then
+				if not acquiredAt then
+					acquiredAt = now
+					extra = math.random() * jitter -- humanised: a different reaction time every time
+				end
+				if now - acquiredAt >= delay + extra and now - lastClick > (cfg.interval or 0.12) then
 					lastClick = now
 					click()
 				end
