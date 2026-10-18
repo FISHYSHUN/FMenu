@@ -12,6 +12,7 @@
 local import = ...
 local Util = import("Util")
 local ESP = import("ESP")
+local Defense = import("Defense")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -471,12 +472,10 @@ do
 			esp = ESP.new({
 				maxDistance = 1000,
 				resolve = function(plr, char, dist)
-					local hum = Util.humanoid(char)
 					if Util.flags.hideTeam and Util.isTeammate(plr) then
 						return nil
 					end
-					local color = plr.Team and plr.TeamColor.Color or Color3.fromRGB(255, 90, 90)
-					return color, ("%s  %dm  %dhp"):format(plr.DisplayName, math.floor(dist), math.floor(hum and hum.Health or 0))
+					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90)), ESP.text(plr, char, dist)
 				end,
 			})
 		end,
@@ -525,7 +524,8 @@ do
 			end
 			local cam = workspace.CurrentCamera
 			local vp = cam.ViewportSize
-			local origin = Vector2.new(vp.X / 2, vp.Y)
+			local from = ESP.style.tracerFrom
+			local origin = Vector2.new(vp.X / 2, from == "top" and 0 or (from == "center" and vp.Y / 2 or vp.Y))
 			local used = 0
 			for _, plr in ipairs(Players:GetPlayers()) do
 				if plr ~= lp and Util.isAlive(plr.Character) and not (Util.flags.hideTeam and Util.isTeammate(plr)) then
@@ -541,7 +541,7 @@ do
 							line.Size = UDim2.fromOffset(delta.Magnitude, thickness)
 							line.Position = UDim2.fromOffset(mid.X, mid.Y)
 							line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
-							line.BackgroundColor3 = plr.Team and plr.TeamColor.Color or Color3.fromRGB(255, 90, 90)
+							line.BackgroundColor3 = ESP.color(plr, plr.Character, Color3.fromRGB(255, 90, 90))
 							line.Visible = true
 						end
 					end
@@ -864,11 +864,11 @@ do
 			esp = ESP.new({
 				make = ESP.box,
 				maxDistance = 1000,
-				resolve = function(plr)
+				resolve = function(plr, char, dist)
 					if Util.flags.hideTeam and Util.isTeammate(plr) then
 						return nil
 					end
-					return plr.Team and plr.TeamColor.Color or Color3.fromRGB(255, 90, 90), plr.DisplayName
+					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90)), ESP.text(plr, char, dist)
 				end,
 			})
 		end,
@@ -885,6 +885,35 @@ do
 			end
 		end,
 	}
+end
+
+-- ESP style rows: they only write into ESP.style, every ESP re-reads it on its next update
+do
+	local style = ESP.style
+	features.chams = { set = function(on, v) style.highlight = on; style.fill = v / 100 end }
+	features.outline = { set = function(on, v) style.outline = on and v / 100 or 1 end }
+	features.espNames = {
+		set = function(on, v)
+			style.showName = on
+			style.textSize = math.floor(lerp(10, 20, v) + 0.5)
+		end,
+	}
+	features.espDist = { set = function(on) style.showDist = on end }
+	features.espHealth = { set = function(on) style.showHealth = on end }
+	features.espTool = { set = function(on) style.showTool = on end }
+	features.healthbar = { set = function(on) style.healthBar = on end }
+	features.boxfill = { set = function(on, v) style.boxFill = on and v / 100 or 0 end }
+	features.boxthick = { set = function(on, v) style.boxThick = on and lerp(1, 4, v) or 1.5 end }
+	features.hpcolor = { set = function(on) style.hpColor = on end }
+	features.rainbow = { set = function(on, v) style.rainbow = on; style.rainbowSpeed = lerp(0.05, 1, v) end }
+	features.customcolor = { set = function(on, v) style.custom = on; style.hue = v / 100 end }
+	features.wallcheck = { set = function(on) style.wallCheck = on end }
+	features.tracerFrom = {
+		set = function(on, v)
+			style.tracerFrom = (not on or v < 34) and "bottom" or (v < 67 and "center" or "top")
+		end,
+	}
+	features.espRate = { set = function(on, v) style.rate = on and lerp(4, 30, v) or 10 end }
 end
 
 -- hide teammates: player ESP, boxes and tracers skip your team
@@ -975,6 +1004,13 @@ end
 features.reducedMotion = {
 	set = function(on, _v, c)
 		c.animations.Enabled = not on
+	end,
+}
+
+-- menuOpacity: on = see-through menu (value 0-100 -> 25-100% opaque), off = solid
+features.menuOpacity = {
+	set = function(on, v, c)
+		c.ui:setOpacity(on and lerp(0.25, 1, v) or 1)
 	end,
 }
 
@@ -1166,6 +1202,11 @@ function Functionality.destroy()
 		hudGui:Destroy()
 		hudGui = nil
 	end
+end
+
+-- anti-fling, no collision, stabilizer, cheat detection (src/Defense.lua)
+for id, def in pairs(Defense.features) do
+	features[id] = def
 end
 
 return Functionality
