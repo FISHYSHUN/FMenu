@@ -76,6 +76,24 @@ function Util.alive(char)
 	return hum ~= nil and hum.Health > 0
 end
 
+-- Strict versions for OTHER players' characters. The plain root/humanoid/alive above fall back to YOUR
+-- character when given nil, which silently turns "player has no character" into "you" (that is what made
+-- ESP throw while somebody was respawning).
+function Util.isAlive(char)
+	if not char then
+		return false
+	end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.Health > 0
+end
+
+function Util.rootOf(char)
+	return char and char:FindFirstChild("HumanoidRootPart") or nil
+end
+
+-- settings several modules read (set by Functionality's rows)
+Util.flags = { hideTeam = false }
+
 function Util.isTeammate(plr)
 	return plr.Team ~= nil and plr.Team == Players.LocalPlayer.Team
 end
