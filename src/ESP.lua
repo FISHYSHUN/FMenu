@@ -21,6 +21,92 @@ local ESP = {}
 ESP.__index = ESP
 
 ESP.HIGHLIGHT_CAP = 28 -- shared by every ESP instance
+
+-- Look of every ESP (universal + game ones). Functionality's "Style" rows write into this table and the
+-- markers re-read it on every update, so changes show up within a tick.
+ESP.style = {
+	highlight = true, -- chams fill / outline on or off
+	fill = 0.8, -- highlight fill transparency
+	outline = 0, -- highlight outline transparency (1 = no outline)
+	showName = true,
+	showDist = true,
+	showHealth = true,
+	showTool = false,
+	textSize = 13,
+	healthBar = true, -- boxes only
+	boxFill = 0, -- 0 = hollow box, up to 1 = solid
+	boxThick = 1.5,
+	hpColor = false, -- colour by health
+	rainbow = false,
+	rainbowSpeed = 0.2,
+	custom = false, -- fixed colour from `hue`
+	hue = 0, -- 0..1
+	wallCheck = false, -- green when you can see them, red behind walls
+	tracerFrom = "bottom", -- bottom | center | top (read by tracers)
+	rate = 10, -- updates per second
+}
+
+local function healthRatio(char)
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		return nil
+	end
+	return math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+end
+
+-- label text built from the Style toggles. `extra` is a game specific bit (e.g. "[SHERIFF]")
+function ESP.text(plr, char, dist, extra)
+	local s = ESP.style
+	local parts = {}
+	if s.showName then
+		parts[#parts + 1] = plr.DisplayName
+	end
+	if extra and extra ~= "" then
+		parts[#parts + 1] = extra
+	end
+	if s.showDist then
+		parts[#parts + 1] = ("%dm"):format(math.floor(dist))
+	end
+	if s.showHealth then
+		local r = healthRatio(char)
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if r and hum then
+			parts[#parts + 1] = ("%dhp"):format(math.floor(hum.Health))
+		end
+	end
+	if s.showTool then
+		local tool = char:FindFirstChildOfClass("Tool")
+		if tool then
+			parts[#parts + 1] = tool.Name
+		end
+	end
+	return table.concat(parts, "  ")
+end
+
+-- colour from the Style toggles. Priority: wall check > custom > rainbow > health > team > fallback
+function ESP.color(plr, char, fallback)
+	local s = ESP.style
+	if s.wallCheck then
+		local cam = workspace.CurrentCamera
+		local part = char:FindFirstChild("Head") or Util.rootOf(char)
+		if cam and part then
+			return Util.visible(cam.CFrame.Position, part) and Color3.fromRGB(90, 220, 130) or Color3.fromRGB(255, 90, 90)
+		end
+	end
+	if s.custom then
+		return Color3.fromHSV(s.hue, 0.85, 1)
+	end
+	if s.rainbow then
+		return Color3.fromHSV((os.clock() * s.rainbowSpeed) % 1, 0.85, 1)
+	end
+	if s.hpColor then
+		local r = healthRatio(char)
+		if r then
+			return Color3.fromHSV(r * 0.33, 0.9, 1)
+		end
+	end
+	return (plr.Team and plr.TeamColor.Color) or fallback
+end
 local highlightsUsed = 0
 
 local holder
@@ -46,7 +132,7 @@ end
 
 function ESP.marker(adornee, color, text, fill)
 	local parent = getHolder()
-	local curColor, curFill = color, fill or 0.75
+	local curColor, curFill = color, fill or ESP.style.fill
 	local hl
 
 	local bb = Util.make("BillboardGui", {
@@ -80,7 +166,7 @@ function ESP.marker(adornee, color, text, fill)
 				FillColor = curColor,
 				OutlineColor = curColor,
 				FillTransparency = curFill,
-				OutlineTransparency = 0,
+				OutlineTransparency = ESP.style.outline,
 				DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
 			}, parent)
 		elseif not on and hl then
@@ -92,15 +178,15 @@ function ESP.marker(adornee, color, text, fill)
 
 	function handle.update(c, t, f)
 		curColor = c
-		if f then
-			curFill = f
-		end
+		curFill = f or ESP.style.fill
 		if hl then
 			hl.FillColor = c
 			hl.OutlineColor = c
 			hl.FillTransparency = curFill
+			hl.OutlineTransparency = ESP.style.outline
 		end
 		label.TextColor3 = c
+		label.TextSize = ESP.style.textSize
 		label.Text = t or ""
 	end
 
@@ -138,8 +224,23 @@ function ESP.box(adornee, color, text)
 		AlwaysOnTop = true,
 		LightInfluence = 0,
 	}, parent)
-	local frame = Util.make("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, bb)
+	local frame = Util.make("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BackgroundTransparency = 1, BorderSizePixel = 0 }, bb)
 	local stroke = Util.make("UIStroke", { Color = color, Thickness = 1.5, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, frame)
+	-- health bar on the left edge of the box (pixel sized, so it stays readable at any distance)
+	local barBack = Util.make("Frame", {
+		Position = UDim2.new(0, -6, 0, 0),
+		Size = UDim2.new(0, 3, 1, 0),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 24),
+		BackgroundTransparency = 0.3,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, frame)
+	local barFill = Util.make("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.fromScale(1, 1),
+		BorderSizePixel = 0,
+	}, barBack)
 	local label = Util.make("TextLabel", {
 		Position = UDim2.new(0, 0, 1, 2),
 		Size = UDim2.new(1, 0, 0, 14),
@@ -154,9 +255,20 @@ function ESP.box(adornee, color, text)
 	local handle = {}
 	local dead = false
 	function handle.update(c, t)
+		local s = ESP.style
 		stroke.Color = c
+		stroke.Thickness = s.boxThick
+		frame.BackgroundColor3 = c
+		frame.BackgroundTransparency = s.boxFill > 0 and (1 - s.boxFill * 0.6) or 1
 		label.TextColor3 = c
+		label.TextSize = s.textSize - 1
 		label.Text = t or ""
+		local ratio = s.healthBar and healthRatio(adornee)
+		barBack.Visible = ratio ~= nil and ratio ~= false
+		if ratio then
+			barFill.Size = UDim2.fromScale(1, ratio)
+			barFill.BackgroundColor3 = Color3.fromHSV(ratio * 0.33, 0.9, 1)
+		end
 	end
 	function handle.isAlive()
 		return not dead and bb.Parent ~= nil and adornee.Parent ~= nil and adornee:IsDescendantOf(workspace)
@@ -175,7 +287,7 @@ function ESP.new(opts)
 	self.resolve = opts.resolve
 	self.make = opts.make or ESP.marker
 	self.maxDistance = opts.maxDistance or 1000
-	self.fill = opts.fill or 0.8
+	self.fill = opts.fill -- optional per-instance override of ESP.style.fill
 	self.entries = {}
 	self.enabled = false
 	self._acc = 0
@@ -208,7 +320,7 @@ function ESP:step(dt)
 		return
 	end
 	self._acc += dt
-	if self._acc < 0.1 then
+	if self._acc < 1 / math.max(ESP.style.rate, 1) then
 		return
 	end
 	self._acc = 0
@@ -270,7 +382,7 @@ function ESP:_update()
 			end
 			e.marker.update(c.color, c.text, self.fill)
 			if e.marker.setHighlight then
-				e.marker.setHighlight(i <= ESP.HIGHLIGHT_CAP)
+				e.marker.setHighlight(ESP.style.highlight and i <= ESP.HIGHLIGHT_CAP)
 			end
 		end)
 		if not ok then
