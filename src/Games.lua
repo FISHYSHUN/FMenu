@@ -37,20 +37,27 @@ local baseTabs = {
 		{ id = "fps", label = "Show FPS", slider = "Refresh rate", value = 60, on = true, fmt = range(1, 10, "/s") },
 		{ id = "ping", label = "Show ping", slider = "Refresh rate", value = 40, on = false, fmt = range(1, 10, "/s") },
 		{ id = "clock", label = "Show clock", slider = "24h / 12h (50+)", value = 0, on = false, fmt = function(v) return v >= 50 and "12h" or "24h" end },
+		{ id = "coords", label = "Coordinates", slider = "Unused", value = 0, on = false },
+		{ id = "speedo", label = "Speedometer", slider = "Unused", value = 0, on = false },
 		{ id = "compact", label = "Compact mode", slider = "Shrink amount", value = 50, on = false, fmt = range(0, 25, "%") },
 	} },
 	{ name = "Player", rows = {
 		{ id = "speed", label = "Speed", slider = "Walk speed", value = 30, on = false, fmt = range(16, 150) },
 		{ id = "jump", label = "High jump", slider = "Jump power", value = 25, on = false, fmt = range(50, 300) },
 		{ id = "infjump", label = "Infinite jump", slider = "Unused", value = 0, on = false },
+		{ id = "bhop", label = "Bunny hop", slider = "Unused", value = 0, on = false },
 		{ id = "noclip", label = "Noclip", slider = "Unused", value = 0, on = false },
 		{ id = "fly", label = "Fly", slider = "Fly speed", value = 35, on = false, fmt = range(20, 200) },
 		{ id = "clicktp", label = "Ctrl+click TP", slider = "Unused", value = 0, on = false },
+		{ id = "gravity", label = "Gravity", slider = "Gravity", value = 50, on = false, fmt = range(20, 196) },
+		{ id = "antivoid", label = "Anti-void", slider = "Unused", value = 0, on = false },
 	} },
 	-- Visual is only for things drawn on other players. World / camera / lighting settings live in Utility.
 	{ name = "Visual", rows = {
 		{ id = "esp", label = "Player ESP", slider = "Max distance", value = 50, on = false, fmt = range(100, 2000, " st") },
+		{ id = "boxes", label = "Box ESP", slider = "Max distance", value = 50, on = false, fmt = range(100, 2000, " st") },
 		{ id = "tracers", label = "Tracers", slider = "Thickness", value = 0, on = false, fmt = range(1, 4, "px") },
+		{ id = "hideteam", label = "Hide teammates", slider = "Unused", value = 0, on = false },
 	} },
 	{ name = "Utility", rows = {
 		{ id = "timeOfDay", label = "Time of day", slider = "Hour (0-24)", value = 60, on = false, fmt = range(0, 24, "h") },
@@ -58,12 +65,17 @@ local baseTabs = {
 		{ id = "fullbright", label = "Fullbright", slider = "Ambient level", value = 100, on = false, fmt = range(50, 100, "%") },
 		{ id = "nofog", label = "No fog", slider = "Unused", value = 0, on = false },
 		{ id = "fov", label = "Field of view", slider = "FOV (40-120)", value = 50, on = false, fmt = range(40, 120) },
+		{ id = "zoom", label = "Hold-C zoom", slider = "Zoom FOV", value = 40, on = false, fmt = range(10, 60) },
+		{ id = "maxzoom", label = "Max zoom out", slider = "Distance", value = 30, on = false, fmt = range(20, 1000, " st") },
+		{ id = "autoclick", label = "Auto-clicker", slider = "Clicks per second", value = 40, on = false, fmt = range(4, 30, "/s") },
 		{ id = "lowgfx", label = "Low graphics", slider = "Unused", value = 0, on = false },
 		{ id = "antiafk", label = "Anti-AFK", slider = "Unused", value = 0, on = true },
 	} },
 	{ name = "Config", rows = {
 		{ id = "reducedMotion", label = "Reduced motion", slider = "Unused", value = 0, on = false },
 		{ id = "autohide", label = "Auto-hide", slider = "Delay (1-10 s)", value = 33, on = true, fmt = range(1, 10, "s") },
+		{ id = "hudlock", label = "Lock HUD", slider = "Unused", value = 0, on = false },
+		{ id = "notifs", label = "Notifications", slider = "Unused", value = 0, on = true },
 	} },
 }
 
