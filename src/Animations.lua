@@ -38,9 +38,9 @@ end
 
 -- tabs ----------------------------------------------------------------
 
-function Animations.styleTab(button, active, colors)
+function Animations.styleTab(button, active, colors, surfaceT)
 	Animations.tween(button, "fast", {
-		BackgroundTransparency = active and 0 or 1,
+		BackgroundTransparency = active and (surfaceT or 0) or 1,
 		TextColor3 = active and colors.text or colors.muted,
 	})
 end
