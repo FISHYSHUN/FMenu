@@ -26,7 +26,7 @@ UI.CONFIG = {
 	HideSeconds = 4,
 	ToggleKey = Enum.KeyCode.Insert,
 	TopOffset = 12,
-	Width = 560, -- the height is not fixed, it follows the active tab (see UI:_layoutFor)
+	Width = 600, -- the height is not fixed, it follows the active tab (see UI:_layoutFor)
 	Pill = Vector2.new(176, 38),
 	LongPressSeconds = 0.5,
 	SlideDistance = 180, -- how far panels travel when switching tabs
@@ -52,8 +52,9 @@ local LEAD_W = 70
 local LEAD_EXP = UDim2.new(0, 14, 0, 0)
 local LEAD_MIN = UDim2.new(0.5, -LEAD_W / 2, 0, 0)
 -- vertical layout of the expanded menu: header + tab bar + PANEL_Y.. rows ..GAP, hint line, PAD
-local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 532
+local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 572
 local CELL_H, GAP = 38, 8 -- one row, space between rows
+local HEAD_H, SEC_GAP = 20, 10 -- section title line, space between sections
 local HINT_H, PAD = 14, 8
 local CHROME = PANEL_Y + GAP + HINT_H + PAD -- everything that is not the row panel
 local PANEL_POS = UDim2.fromOffset(PANEL_X, PANEL_Y)
@@ -127,6 +128,8 @@ function UI.new(deps)
 	self.rowList, self.rowsById = {}, {}
 	self.tabButtons, self.panels, self.scrolls, self.tabRows, self.tabBadges = {}, {}, {}, {}, {}
 	self.expanded = Vector2.new(CFG.Width, 246) -- real height is set per tab once the rows exist
+	self.tabNatural = {} -- tab index -> height its sections need
+	self.surfaceT = 0 -- background transparency of the menu surfaces (see UI:setOpacity)
 	self._conns = {}
 
 	self:_buildShell()
@@ -248,7 +251,7 @@ function UI:_buildShell()
 	self.tabBar = make("Frame", {
 		Name = "Tabs",
 		Position = UDim2.fromOffset(14, 44),
-		Size = UDim2.fromOffset(532, 32),
+		Size = UDim2.fromOffset(PANEL_W, 32),
 		BackgroundColor3 = C.panel2,
 		BorderSizePixel = 0,
 	}, self.body)
@@ -398,10 +401,10 @@ function UI:build(tabs)
 			Size = UDim2.new(1 / n, -((n - 1) * 4) / n, 1, 0),
 			AutoButtonColor = false,
 			BackgroundColor3 = C.panel,
-			BackgroundTransparency = i == 1 and 0 or 1,
+			BackgroundTransparency = i == 1 and self.surfaceT or 1,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamBold,
-			TextSize = 13,
+			TextSize = 12,
 			TextColor3 = i == 1 and C.text or C.muted,
 		}, self.tabBar)
 		corner(tbtn, 7)
@@ -449,17 +452,70 @@ function UI:build(tabs)
 			ScrollingDirection = Enum.ScrollingDirection.Y,
 			ElasticBehavior = Enum.ElasticBehavior.Never,
 		}, panel)
-		make("UIGridLayout", {
-			CellSize = UDim2.new(0.5, -4, 0, CELL_H),
-			CellPadding = UDim2.fromOffset(GAP, GAP),
+		make("UIListLayout", {
+			Padding = UDim.new(0, SEC_GAP),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}, scroll)
 		self.panels[i] = panel
 		self.scrolls[i] = scroll
 
-		for r, data in ipairs(tab.rows) do
-			self:_buildRow(data, r, scroll, i)
+		-- tab.rows may contain { header = "Title" } entries: they start a new titled section. Rows before the
+		-- first header (or in a tab without any) form an untitled section. Each section is its own 2 column grid.
+		local sections, cur = {}, nil
+		for _, data in ipairs(tab.rows) do
+			if data.header then
+				cur = { title = data.header, rows = {} }
+				sections[#sections + 1] = cur
+			else
+				if not cur then
+					cur = { rows = {} }
+					sections[#sections + 1] = cur
+				end
+				cur.rows[#cur.rows + 1] = data
+			end
 		end
+		local natural, shownSections = 0, 0
+		for _, sec in ipairs(sections) do
+			if #sec.rows > 0 then
+				shownSections += 1
+				local lines = math.ceil(#sec.rows / 2)
+				local gridH = lines * CELL_H + (lines - 1) * GAP
+				local top = sec.title and HEAD_H or 0
+				natural += top + gridH + (shownSections > 1 and SEC_GAP or 0)
+				local frame = make("Frame", {
+					Name = "Section",
+					LayoutOrder = shownSections,
+					Size = UDim2.new(1, 0, 0, top + gridH),
+					BackgroundTransparency = 1,
+				}, scroll)
+				if sec.title then
+					make("TextLabel", {
+						Position = UDim2.fromOffset(3, 0),
+						Size = UDim2.new(1, -3, 0, HEAD_H - 6),
+						BackgroundTransparency = 1,
+						Font = Enum.Font.GothamBold,
+						TextSize = 10,
+						TextColor3 = C.muted,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						Text = sec.title:upper(),
+					}, frame)
+				end
+				local grid = make("Frame", {
+					Position = UDim2.fromOffset(0, top),
+					Size = UDim2.new(1, 0, 0, gridH),
+					BackgroundTransparency = 1,
+				}, frame)
+				make("UIGridLayout", {
+					CellSize = UDim2.new(0.5, -4, 0, CELL_H),
+					CellPadding = UDim2.fromOffset(GAP, GAP),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, grid)
+				for r, data in ipairs(sec.rows) do
+					self:_buildRow(data, r, grid, i)
+				end
+			end
+		end
+		self.tabNatural[i] = natural
 	end
 	self.built = true
 	self:_applyHeight(false)
@@ -487,6 +543,7 @@ function UI:_buildRow(data, order, parent, tabIndex)
 		BorderSizePixel = 0,
 	}, parent)
 	corner(btn, 10)
+	row.btn = btn
 	row.stroke = make("UIStroke", {
 		Color = C.accent, Thickness = 1, Transparency = 1,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
@@ -709,13 +766,11 @@ end
 -- tabs
 ---------------------------------------------------------------------
 -- The menu is exactly as tall as the active tab needs: header, tab bar, its rows, hint line. Rows sit in
--- a two column grid, so 7 rows take 4 grid lines. When that would run off the screen the panel is capped
+-- a two column grid per section, so 7 rows take 4 grid lines. When that would run off the screen the panel is capped
 -- and its rows scroll instead.
 -- returns panelHeight, totalMenuHeight, naturalPanelHeight
 function UI:_layoutFor(i)
-	local n = #(self.tabRows[i] or {})
-	local lines = math.ceil(n / 2)
-	local natural = lines > 0 and (lines * CELL_H + (lines - 1) * GAP) or 0
+	local natural = self.tabNatural[i] or 0
 	local vpY = self.gui.AbsoluteSize.Y
 	if vpY <= 0 then
 		local cam = workspace.CurrentCamera
@@ -759,7 +814,7 @@ function UI:_selectTab(i)
 	local dir = i > prev and 1 or -1 -- moving right brings the new panel in from the right
 	s.tab = i
 	for idx, btn in ipairs(self.tabButtons) do
-		self.A.styleTab(btn, idx == i, C)
+		self.A.styleTab(btn, idx == i, C, self.surfaceT)
 		if idx ~= i and idx ~= prev then
 			self.panels[idx].Visible = false -- leftover from a rapid double switch
 		end
@@ -832,6 +887,20 @@ function UI:toggle()
 end
 
 -- called by Functionality (scale / auto-hide features)
+-- alpha 1 = solid menu, lower = see-through (the menu surfaces only, text and switches stay solid)
+function UI:setOpacity(alpha)
+	local t = 1 - math.clamp(alpha, 0.2, 1)
+	self.surfaceT = t
+	self.root.BackgroundTransparency = t
+	for _, row in ipairs(self.rowList) do
+		row.btn.BackgroundTransparency = t
+	end
+	local active = self.tabButtons[self.state.tab]
+	if active then
+		active.BackgroundTransparency = t
+	end
+end
+
 function UI:setScale(scale)
 	self.scale.Scale = scale
 	if self.built then
