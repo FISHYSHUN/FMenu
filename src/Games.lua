@@ -28,6 +28,7 @@ local import = ...
 local Util = import("Util")
 local ESP = import("ESP")
 local Troll = import("Troll")
+local Vehicle = import("Vehicle")
 local range = Util.range
 
 local Games = {}
@@ -62,11 +63,12 @@ end
 local baseTabs = {
 	{ name = "Main", rows = {
 		{ header = "Movement" },
-		{ id = "speed", label = "Speed", slider = "Walk speed", value = 30, on = false, fmt = range(16, 150) },
-		{ id = "jump", label = "High jump", slider = "Jump power", value = 25, on = false, fmt = range(50, 300) },
+		{ id = "speed", label = "Speed", slider = "Walk speed", value = 30, on = false, fmt = range(16, 150), opts = { Util.modeOption() } },
+		{ id = "jump", label = "High jump", slider = "Jump power", value = 25, on = false, fmt = range(50, 300), opts = { Util.modeOption() } },
 		{ id = "infjump", label = "Infinite jump", slider = "Unused", value = 0, on = false },
 		{ id = "bhop", label = "Bunny hop", slider = "Unused", value = 0, on = false },
 		{ id = "fly", label = "Fly", slider = "Fly speed", value = 35, on = false, fmt = range(20, 200), opts = {
+			Util.modeOption(),
 			{ type = "slider", key = "vert", label = "Up / down speed", min = 0.25, max = 2, step = 0.05, unit = "x", default = 1 },
 			{ type = "slider", key = "smooth", label = "Smoothing", min = 0, max = 1, step = 0.05, pct = true, default = 0 },
 		} },
@@ -80,6 +82,7 @@ local baseTabs = {
 		{ id = "antivoid", label = "Anti-void", slider = "Unused", value = 0, on = false },
 		{ header = "Utility" },
 		{ id = "autoclick", label = "Auto-clicker", slider = "Clicks per second", value = 40, on = false, fmt = range(4, 30, "/s"), opts = {
+			Util.modeOption(),
 			{ type = "toggle", key = "hold", label = "Only while holding left click", default = true },
 		} },
 		{ id = "antiafk", label = "Anti-AFK", slider = "Unused", value = 0, on = true },
@@ -102,6 +105,7 @@ local baseTabs = {
 		{ id = "zoom", label = "Hold-C zoom", slider = "Zoom FOV", value = 40, on = false, fmt = range(10, 60) },
 		{ id = "maxzoom", label = "Max zoom out", slider = "Distance", value = 30, on = false, fmt = range(20, 1000, " st") },
 	} },
+	Vehicle.tab,
 	Troll.tab,
 	-- protection from other players' cheats. Everything here is client side: it changes what YOUR game does
 	-- about other players (collisions, your own velocity, warnings), it cannot kick or ban anyone.
@@ -147,6 +151,8 @@ local baseTabs = {
 		{ id = "autohide", label = "Auto-hide", slider = "Delay (1-10 s)", value = 33, on = true, fmt = range(1, 10, "s") },
 		{ id = "hudlock", label = "Lock HUD", slider = "Unused", value = 0, on = false },
 		{ id = "notifs", label = "Notifications", slider = "Unused", value = 0, on = true },
+		{ header = "Cheat level" },
+		{ id = "cheatLevel", label = "Apply level to all", slider = "Blatant / Semi / Legit", value = 0, on = false, fmt = function(v) return v < 34 and "Blatant" or (v < 67 and "Semi" or "Legit") end },
 		{ header = "Saving" },
 		{ id = "autosave", label = "Autosave", slider = "Unused", value = 0, on = true },
 		{ id = "cfgSave", label = "Save now", slider = "Unused", value = 0, button = true },
