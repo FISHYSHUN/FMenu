@@ -26,6 +26,11 @@ local lp = Players.LocalPlayer
 local range = Util.range
 
 local AIM_BIND = "FMenuAim"
+
+-- "hold to aim" key, an option on both Aim assist and Aim lock
+local function holdOption()
+	return { type = "choice", key = "hold", label = "Aim key", choices = { "Right mouse", "Left mouse", "Shift", "Always" }, default = "Right mouse" }
+end
 local CHEST = { "UpperTorso", "Torso", "HumanoidRootPart" }
 
 local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0 }
@@ -132,10 +137,11 @@ local Rivals = {
 		{ header = "Aiming" },
 		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%"), opts = {
 			Util.modeOption(),
+			holdOption(),
 			{ type = "slider", key = "dead", label = "Dead zone", min = 0.1, max = 3, step = 0.1, unit = " deg", default = 0.4 },
 			{ type = "slider", key = "falloff", label = "Edge falloff", min = 0, max = 1, step = 0.05, pct = true, default = 0.6 },
 		} },
-		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end, opts = { Util.modeOption() } },
+		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end, opts = { Util.modeOption(), holdOption() } },
 		{ id = "rvFov", label = "FOV ring", slider = "Radius", value = 40, on = false, fmt = range(40, 400, "px"), opts = {
 			Util.modeOption(),
 			{ type = "slider", key = "thickness", label = "Thickness", min = 1, max = 5, step = 0.5, unit = "px", default = 1.5 },
@@ -184,10 +190,23 @@ features.rvPred = {
 	end,
 }
 
--- aim assist + aim lock share one render step (right mouse held)
+-- aim assist + aim lock share one render step (aim key held, set in either row's options)
 do
+	local function aimHeld()
+		local o = (aim.lock and aim.lockCfg) or aim.assistCfg or {}
+		local hold = o.hold or "Right mouse"
+		if hold == "Always" then
+			return true
+		elseif hold == "Left mouse" then
+			return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+		elseif hold == "Shift" then
+			return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		end
+		return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+	end
+
 	local function aimStep(dt)
-		if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or UserInputService:GetFocusedTextBox() then
+		if not aimHeld() or UserInputService:GetFocusedTextBox() then
 			aim.target = nil
 			return
 		end
@@ -252,6 +271,7 @@ do
 	features.rvAim = {
 		set = function(on, v, _c, o)
 			aim.assist = on
+			aim.assistCfg = o
 			aim.strength = v / 100 * Util.level(o.mode).aim
 			aim.dead = o.dead or 0.4
 			aim.falloff = o.falloff or 0.6
@@ -265,6 +285,7 @@ do
 	features.rvLock = {
 		set = function(on, v, _c, o)
 			aim.lock = on
+			aim.lockCfg = o
 			aim.smooth = math.max(v, Util.level(o.mode).smooth)
 			refresh()
 		end,
