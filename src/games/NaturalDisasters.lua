@@ -21,8 +21,10 @@ local YELLOW = Color3.fromRGB(255, 214, 64)
 local NDS = {
 	name = "Natural Disaster Survival",
 	tab = { name = "NDS", rows = {
+		{ header = "Disaster info" },
 		{ id = "ndStatus", label = "Disaster HUD", slider = "Scan speed", value = 40, on = false, fmt = range(0.5, 4, "/s") },
 		{ id = "ndAlert", label = "Disaster alert", slider = "Unused", value = 0, on = false },
+		{ header = "Safety" },
 		{ id = "ndSky", label = "Sky platform", slider = "Height", value = 40, on = false, fmt = range(150, 1000, " st") },
 		{ id = "ndAir", label = "Air floor", slider = "Lift above you", value = 20, on = false, fmt = range(5, 100, " st") },
 		{ id = "ndNoFall", label = "No fall damage", slider = "Max fall speed", value = 30, on = false, fmt = range(30, 120) },
