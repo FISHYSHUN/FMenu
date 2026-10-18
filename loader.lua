@@ -95,7 +95,9 @@ cfg.collect = function()
 	local rows = {}
 	for _, row in ipairs(ui:rows()) do
 		if not row.button then
-			rows[row.id] = { on = row.on, value = row.value, opts = row.optv }
+			rows[row.id] = { on = row.on, value = row.value, opts = row.optv, bind = row.bind }
+		elseif row.bind then
+			rows[row.id] = { bind = row.bind }
 		end
 	end
 	return { rows = rows, huds = Functionality.getPositions() }
@@ -104,6 +106,12 @@ end
 ui.onChanged = function(id, enabled, value, opts)
 	Functionality.set(id, enabled, value, opts)
 	cfg:touch()
+end
+-- a keybind fired: say what it did
+ui.onBound = function(row)
+	if not row.button then
+		Functionality.notify(row.label .. (row.on and " on" or " off"), row.on and Color3.fromRGB(72, 214, 134) or Color3.fromRGB(150, 156, 172))
+	end
 end
 Functionality.onHudMoved = function()
 	cfg:touch()
