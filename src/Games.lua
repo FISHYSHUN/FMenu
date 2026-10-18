@@ -65,8 +65,13 @@ local baseTabs = {
 		{ header = "Movement" },
 		{ id = "speed", label = "Speed", slider = "Walk speed", value = 30, on = false, fmt = range(16, 150), opts = { Util.modeOption() } },
 		{ id = "jump", label = "High jump", slider = "Jump power", value = 25, on = false, fmt = range(50, 300), opts = { Util.modeOption() } },
-		{ id = "infjump", label = "Infinite jump", slider = "Unused", value = 0, on = false },
-		{ id = "bhop", label = "Bunny hop", slider = "Unused", value = 0, on = false },
+		{ id = "infjump", label = "Infinite jump", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "slider", key = "limit", label = "Air jumps (0 = unlimited)", min = 0, max = 10, step = 1, default = 0 },
+		} },
+		{ id = "bhop", label = "Bunny hop", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "slider", key = "gain", label = "Speed gain per hop", min = 0, max = 0.2, step = 0.01, pct = true, default = 0 },
+			{ type = "slider", key = "cap", label = "Speed cap", min = 30, max = 150, step = 5, unit = " st/s", default = 80 },
+		} },
 		{ id = "fly", label = "Fly", slider = "Fly speed", value = 35, on = false, fmt = range(20, 200), opts = {
 			Util.modeOption(),
 			{ type = "slider", key = "vert", label = "Up / down speed", min = 0.25, max = 2, step = 0.05, unit = "x", default = 1 },
@@ -79,7 +84,10 @@ local baseTabs = {
 			{ type = "slider", key = "lift", label = "Land above spot", min = 0, max = 10, step = 1, unit = " st", default = 3 },
 		} },
 		{ id = "gravity", label = "Gravity", slider = "Gravity", value = 50, on = false, fmt = range(20, 196) },
-		{ id = "antivoid", label = "Anti-void", slider = "Unused", value = 0, on = false },
+		{ id = "antivoid", label = "Anti-void", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "slider", key = "depth", label = "Trigger height above void", min = 20, max = 300, step = 10, unit = " st", default = 80 },
+			{ type = "slider", key = "lift", label = "Return height", min = 2, max = 30, step = 1, unit = " st", default = 5 },
+		} },
 		{ header = "Utility" },
 		{ id = "autoclick", label = "Auto-clicker", slider = "Clicks per second", value = 40, on = false, fmt = range(4, 30, "/s"), opts = {
 			Util.modeOption(),
@@ -102,7 +110,10 @@ local baseTabs = {
 		{ id = "lowgfx", label = "Low graphics", slider = "Unused", value = 0, on = false },
 		{ header = "Camera" },
 		{ id = "fov", label = "Field of view", slider = "FOV (40-120)", value = 50, on = false, fmt = range(40, 120) },
-		{ id = "zoom", label = "Hold-C zoom", slider = "Zoom FOV", value = 40, on = false, fmt = range(10, 60) },
+		{ id = "zoom", label = "Hold-key zoom", slider = "Zoom FOV", value = 40, on = false, fmt = range(10, 60), opts = {
+			{ type = "choice", key = "key", label = "Zoom key", choices = { "C", "Z", "X", "V", "Q", "E" }, default = "C" },
+			{ type = "toggle", key = "smooth", label = "Smooth zoom", default = true },
+		} },
 		{ id = "maxzoom", label = "Max zoom out", slider = "Distance", value = 30, on = false, fmt = range(20, 1000, " st") },
 	} },
 	Vehicle.tab,
