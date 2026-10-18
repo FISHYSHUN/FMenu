@@ -15,6 +15,7 @@ local Util = import("Util")
 local ESP = import("ESP")
 local Defense = import("Defense")
 local Troll = import("Troll")
+local Vehicle = import("Vehicle")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -333,13 +334,13 @@ features.compact = {
 do
 	local enabled, target, orig = false, 16, nil
 	features.speed = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			local hum = Util.humanoid()
 			if on and not enabled and hum then
 				orig = hum.WalkSpeed
 			end
 			enabled = on
-			target = lerp(16, 150, v)
+			target = 16 + (lerp(16, 150, v) - 16) * Util.level(o.mode).power -- Mode scales the boost above normal
 			if not on and hum then
 				hum.WalkSpeed = orig or 16
 			end
@@ -360,14 +361,15 @@ end
 do
 	local enabled, power, height, orig = false, 50, 7.2, nil
 	features.jump = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			local hum = Util.humanoid()
 			if on and not enabled and hum then
 				orig = { hum.JumpPower, hum.JumpHeight }
 			end
 			enabled = on
-			power = lerp(50, 300, v)
-			height = lerp(7.2, 50, v)
+			local p = Util.level(o.mode).power
+			power = 50 + (lerp(50, 300, v) - 50) * p
+			height = 7.2 + (lerp(7.2, 50, v) - 7.2) * p
 			if not on and hum and orig then
 				hum.JumpPower, hum.JumpHeight = orig[1], orig[2]
 			end
@@ -458,7 +460,7 @@ do
 	end
 	features.fly = {
 		set = function(on, v, _c, o)
-			speed = lerp(20, 200, v)
+			speed = 20 + (lerp(20, 200, v) - 20) * Util.level(o.mode).power
 			cfg = o
 			if on == enabled then
 				return
@@ -1044,7 +1046,7 @@ do
 		set = function(on, v, _c, o)
 			enabled = on
 			cfg = o
-			interval = 1 / lerp(4, 30, v)
+			interval = 1 / (4 + (lerp(4, 30, v) - 4) * Util.level(o.mode).power)
 		end,
 		step = function()
 			if not enabled or not mouse1click or UserInputService:GetFocusedTextBox() then
@@ -1088,6 +1090,24 @@ features.cfgSave = {
 		end
 	end,
 }
+-- cheat level: while ON, every cheat with a Mode option is switched to the chosen level (Blatant / Semi / Legit).
+-- Each cheat's own Mode can still be changed afterwards in its right-click menu. The first call (menu start-up,
+-- restoring saved settings) only records the state so saved per-cheat modes are not overwritten.
+do
+	local started, lastOn, lastLevel = false, false, nil
+	features.cheatLevel = {
+		set = function(on, v, c)
+			local level = v < 34 and "Blatant" or (v < 67 and "Semi" or "Legit")
+			local apply = started and on and (not lastOn or level ~= lastLevel) and not c.ui.bulk
+			started, lastOn, lastLevel = true, on, level
+			if apply then
+				c.ui:setOptionAll("mode", level)
+				c.notify("cheat level: " .. level, Color3.fromRGB(139, 125, 255))
+			end
+		end,
+	}
+end
+
 features.cfgReset = {
 	set = function(on, _v, c)
 		if not on then
@@ -1321,6 +1341,11 @@ end
 
 -- trolling (src/Troll.lua)
 for id, def in pairs(Troll.features) do
+	features[id] = def
+end
+
+-- vehicle controller (src/Vehicle.lua)
+for id, def in pairs(Vehicle.features) do
 	features[id] = def
 end
 
