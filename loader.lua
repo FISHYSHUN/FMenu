@@ -4,6 +4,8 @@
 -- Survives teleports: queues itself with queue_on_teleport so the menu is rebuilt (and the right game tab
 -- picked) in every place you land in, e.g. Rivals lobby -> match.
 --
+-- Settings are saved per game to FMenu/<profile>.json (needs writefile / readfile in the executor).
+--
 -- Every module in src/ is fetched from the same branch, executed once and cached. Each module gets
 -- `import` as its first vararg (`local import = ...`). Re-running the loader tears down the old menu
 -- first, so you can execute it again after pushing changes.
@@ -67,30 +69,59 @@ local Animations = import("Animations")
 local UI = import("UI")
 local Functionality = import("Functionality")
 local Games = import("Games")
+local Config = import("Config")
 
 local profile = Games.resolve(game.PlaceId, game.Name)
+
+-- saved settings: one file per game profile (FMenu/<profile>.json). Applied to the rows before the UI is built.
+local cfg = Config.new(profile.name)
+local saved = cfg:load()
+Config.apply(profile.tabs, saved)
+Functionality.setPositions(saved and saved.huds)
+if saved then
+	print(("[FMenu] loaded saved settings from %s"):format(cfg.path))
+end
 
 local ui = UI.new({ Animations = Animations, title = "FMenu", profileName = profile.name })
 ui:build(profile.tabs)
 
-Functionality.init({ ui = ui, animations = Animations, profileName = profile.name })
+Functionality.init({ ui = ui, animations = Animations, profileName = profile.name, config = cfg })
 for id, def in pairs(profile.features) do
 	Functionality.register(id, def)
 end
 
-ui.onChanged = function(id, enabled, value)
-	Functionality.set(id, enabled, value)
+-- what gets written: every switch row (value + right-click options) and where the HUD labels were dragged to
+cfg.collect = function()
+	local rows = {}
+	for _, row in ipairs(ui:rows()) do
+		if not row.button then
+			rows[row.id] = { on = row.on, value = row.value, opts = row.optv }
+		end
+	end
+	return { rows = rows, huds = Functionality.getPositions() }
+end
+
+ui.onChanged = function(id, enabled, value, opts)
+	Functionality.set(id, enabled, value, opts)
+	cfg:touch()
+end
+Functionality.onHudMoved = function()
+	cfg:touch()
 end
 
 -- apply the starting state of every row (restores originals for the ones that start off)
 for _, row in ipairs(ui:rows()) do
-	Functionality.set(row.id, row.on, row.value)
+	Functionality.set(row.id, row.on, row.value, row.optv)
 end
 ui:start()
+cfg.ready = true -- from here on changes are autosaved
 
 genv.FMenu = {
 	profile = profile.name,
 	destroy = function()
+		if cfg.autosave then
+			cfg:save()
+		end
 		Functionality.destroy()
 		ui:destroy()
 	end,

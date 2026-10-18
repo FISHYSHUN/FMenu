@@ -1,7 +1,7 @@
 -- ModuleScript: UI
 -- Builds the gui, owns input (clicks, right-click / long-press slider popover) and the
 -- minimize/expand + countdown state. All motion is delegated to Animations.
--- It knows nothing about what the toggles actually do: it just calls ui.onChanged(id, enabled, value).
+-- It knows nothing about what the toggles actually do: it just calls ui.onChanged(id, enabled, value, opts).
 --
 -- Slider popover notes (why it no longer closes by itself):
 --   * a full-screen "scrim" button sits under the popover while it is open. Pressing it closes the
@@ -9,7 +9,10 @@
 --     No hit-testing math, so mouse / touch / inset differences cannot close it by accident.
 --   * dragging reads the real pointer X every move event and keeps going even if the pointer
 --     leaves the popover.
---   * -/+ buttons (hold to repeat) for fine control.
+--   * mouse wheel over a slider nudges it for fine control.
+--
+-- The popover is the feature's settings menu: the row's main slider (when it has one) followed by the row's
+-- `opts` controls (slider / hue / toggle / choice). Values live in row.optv and are handed to onChanged.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -58,7 +61,13 @@ local HEAD_H, SEC_GAP = 20, 10 -- section title line, space between sections
 local HINT_H, PAD = 14, 8
 local CHROME = PANEL_Y + GAP + HINT_H + PAD -- everything that is not the row panel
 local PANEL_POS = UDim2.fromOffset(PANEL_X, PANEL_Y)
-local POP_W, POP_H = 260, 76
+local POP_W = 290
+local POP_HEAD = 34
+local HUE_STOPS = {}
+for i = 0, 6 do
+	HUE_STOPS[#HUE_STOPS + 1] = ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i / 6, 0.85, 1))
+end
+local HUE_SEQ = ColorSequence.new(HUE_STOPS)
 
 ---------------------------------------------------------------------
 -- helpers
@@ -100,6 +109,42 @@ local function shown(row, v)
 	return tostring(v)
 end
 
+-- text for an option control's value
+local function fmtOpt(d, v)
+	if d.fmt then
+		return d.fmt(v)
+	end
+	if d.type == "hue" then
+		return ("%d deg"):format(math.floor(v * 360 + 0.5))
+	end
+	if d.pct then
+		return ("%d%%"):format(math.floor(v * 100 + 0.5))
+	end
+	local step = d.step or 1
+	local dec = step >= 1 and 0 or (step >= 0.1 and 1 or 2)
+	local text = dec == 0 and ("%d"):format(math.floor(v + 0.5)) or ("%." .. dec .. "f"):format(v)
+	return text .. (d.unit or "")
+end
+
+-- a saved / default option value, checked against its definition (nil = not usable)
+local function sane(d, v)
+	local t = d.type
+	if t == "toggle" then
+		if type(v) == "boolean" then
+			return v
+		end
+	elseif t == "choice" then
+		for _, c in ipairs(d.choices) do
+			if c == v then
+				return v
+			end
+		end
+	elseif type(v) == "number" then
+		return math.clamp(v, d.min or 0, d.max or (t == "hue" and 1 or 100))
+	end
+	return nil
+end
+
 ---------------------------------------------------------------------
 -- construction
 ---------------------------------------------------------------------
@@ -118,9 +163,8 @@ function UI.new(deps)
 		tab = 1,
 		activeRow = nil,
 		popOpen = false,
-		dragging = false,
-		dragInput = nil,
-		stepToken = 0,
+		drag = nil, -- { ctl, input } while a popover slider is being dragged
+		hover = nil, -- slider under the pointer (mouse wheel target)
 		token = 0,
 		autoHide = true,
 		hideSeconds = CFG.HideSeconds,
@@ -268,7 +312,7 @@ function UI:_buildShell()
 
 	-- pinned to the bottom of the body, so it always sits right under the last row
 	self.hint = make("TextLabel", {
-		Text = "click = toggle  |  right-click or long-press = slider  |  drag HUD text to move  |  Insert = hide",
+		Text = "click = toggle  |  right-click or long-press = settings  |  drag HUD text to move  |  Insert = hide",
 		AnchorPoint = Vector2.new(0.5, 1),
 		Position = UDim2.new(0.5, 0, 1, -PAD),
 		Size = UDim2.fromOffset(CFG.Width, HINT_H),
@@ -289,10 +333,10 @@ function UI:_buildShell()
 		ZIndex = 9,
 	}, gui)
 
-	-- slider popover lives on the ScreenGui so nothing clips it
+	-- settings popover lives on the ScreenGui so nothing clips it. Its controls are rebuilt every time it opens.
 	local pop = make("CanvasGroup", {
 		Name = "SliderPopover",
-		Size = UDim2.fromOffset(POP_W, POP_H),
+		Size = UDim2.fromOffset(POP_W, 100),
 		BackgroundColor3 = C.panel,
 		BorderSizePixel = 0,
 		Visible = false,
@@ -303,80 +347,44 @@ function UI:_buildShell()
 	self.pop = pop
 	self.popName = make("TextLabel", {
 		Position = UDim2.fromOffset(12, 8),
-		Size = UDim2.fromOffset(150, 18),
+		Size = UDim2.fromOffset(POP_W - 90, 18),
 		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamMedium,
+		Font = Enum.Font.GothamBold,
 		TextSize = 13,
 		TextColor3 = C.text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = "",
 	}, pop)
-	self.popVal = make("TextLabel", {
+	self.popReset = make("TextButton", {
 		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -12, 0, 8),
-		Size = UDim2.fromOffset(80, 18),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		TextSize = 13,
-		TextColor3 = C.accent,
-		TextXAlignment = Enum.TextXAlignment.Right,
-		Text = "0",
-	}, pop)
-
-	self.popMinus = make("TextButton", {
-		Text = "-",
-		Position = UDim2.fromOffset(10, 38),
-		Size = UDim2.fromOffset(24, 26),
+		Position = UDim2.new(1, -10, 0, 6),
+		Size = UDim2.fromOffset(56, 22),
 		BackgroundColor3 = C.panel2,
 		BorderSizePixel = 0,
 		AutoButtonColor = false,
-		Font = Enum.Font.GothamBold,
-		TextSize = 16,
-		TextColor3 = C.text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 11,
+		TextColor3 = C.muted,
+		Text = "reset",
 	}, pop)
-	corner(self.popMinus, 7)
-	self.popPlus = make("TextButton", {
-		Text = "+",
-		Position = UDim2.fromOffset(POP_W - 34, 38),
-		Size = UDim2.fromOffset(24, 26),
-		BackgroundColor3 = C.panel2,
-		BorderSizePixel = 0,
-		AutoButtonColor = false,
-		Font = Enum.Font.GothamBold,
-		TextSize = 16,
-		TextColor3 = C.text,
-	}, pop)
-	corner(self.popPlus, 7)
-
-	self.popHit = make("TextButton", {
-		Position = UDim2.fromOffset(46, 36),
-		Size = UDim2.fromOffset(POP_W - 92, 30),
+	corner(self.popReset, 7)
+	self.popScroll = make("ScrollingFrame", {
+		Position = UDim2.fromOffset(0, POP_HEAD),
+		Size = UDim2.new(1, 0, 1, -POP_HEAD),
 		BackgroundTransparency = 1,
-		Text = "",
-		AutoButtonColor = false,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 0,
+		ScrollBarImageColor3 = C.line,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ElasticBehavior = Enum.ElasticBehavior.Never,
 	}, pop)
-	self.popTrack = make("Frame", {
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.new(1, 0, 0, 6),
-		BackgroundColor3 = C.line,
-		BorderSizePixel = 0,
-	}, self.popHit)
-	corner(self.popTrack, 3)
-	self.popFill = make("Frame", {
-		Size = UDim2.fromScale(0.5, 1),
-		BackgroundColor3 = C.accent,
-		BorderSizePixel = 0,
-	}, self.popTrack)
-	corner(self.popFill, 3)
-	self.popKnob = make("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(16, 16),
-		BackgroundColor3 = C.white,
-		BorderSizePixel = 0,
-	}, self.popTrack)
-	corner(self.popKnob, 10)
+	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, self.popScroll)
+	make("UIPadding", {
+		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
+		PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 10),
+	}, self.popScroll)
 
 	-- handed to Animations for minimize/expand
 	self.refs = {
@@ -529,11 +537,28 @@ end
 function UI:_buildRow(data, order, parent, tabIndex)
 	local row = {
 		id = data.id,
+		label = data.label,
 		slider = data.slider or data.label,
 		value = data.value,
-		on = data.on,
+		on = data.on == true and not data.button,
 		fmt = data.fmt,
+		button = data.button,
+		optDefs = data.opts or {},
+		optv = {},
+		defOn = data.defOn,
+		defValue = data.defValue or data.value,
 	}
+	if row.defOn == nil then
+		row.defOn = data.on == true
+	end
+	-- right-click options: defaults, overridden by saved values that still fit their definition
+	for _, d in ipairs(row.optDefs) do
+		local v = data.optv and sane(d, data.optv[d.key])
+		if v == nil then
+			v = d.default
+		end
+		row.optv[d.key] = v
+	end
 
 	local btn = make("TextButton", {
 		LayoutOrder = order,
@@ -603,6 +628,21 @@ function UI:_buildRow(data, order, parent, tabIndex)
 	}, row.track)
 	corner(row.knob, 8)
 	self.A.setSwitch(row, false, C)
+	row.badge.Visible = row.slider ~= "Unused" and not row.button
+	if row.button then
+		row.track.Visible = false
+		make("TextLabel", {
+			Text = "click to run",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(80, 16),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham,
+			TextSize = 11,
+			TextColor3 = C.muted,
+			TextXAlignment = Enum.TextXAlignment.Right,
+		}, btn)
+	end
 
 	-- left click / tap = toggle
 	local held, longFired = false, false
@@ -611,9 +651,18 @@ function UI:_buildRow(data, order, parent, tabIndex)
 			longFired = false
 			return
 		end
+		if row.button then
+			self.A.highlightRow(row, true)
+			task.delay(0.25, function()
+				self.A.highlightRow(row, false)
+			end)
+			self.onChanged(row.id, true, row.value, row.optv)
+			self:_startCountdown()
+			return
+		end
 		row.on = not row.on
 		self.A.setSwitch(row, true, C)
-		self.onChanged(row.id, row.on, row.value)
+		self.onChanged(row.id, row.on, row.value, row.optv)
 		self:refreshStatus()
 		self:_startCountdown()
 	end))
@@ -678,27 +727,261 @@ function UI:setProfileName(name)
 end
 
 ---------------------------------------------------------------------
--- slider popover
+-- settings popover (right-click / long-press a row)
 ---------------------------------------------------------------------
-function UI:_setSliderVisual(row, v)
-	self.popFill.Size = UDim2.fromScale(v / 100, 1)
-	self.popKnob.Position = UDim2.fromScale(v / 100, 0.5)
-	self.popVal.Text = shown(row, v)
+local function label(parent, text, size, width)
+	return make("TextLabel", {
+		Size = UDim2.new(1, -(width or 0), 0, size or 16),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = text,
+	}, parent)
+end
+
+-- slider control. get() -> current value, set(v) is called when it changes, fmtf(v) -> text. hue = rainbow track.
+function UI:_ctlSlider(order, text, lo, hi, step, get, set, fmtf, hue)
+	local s = self.state
+	local f = make("Frame", { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1 }, self.popScroll)
+	label(f, text, 16, 90)
+	local val = make("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(86, 16),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = C.accent,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Text = "",
+	}, f)
+	local hit = make("TextButton", {
+		Position = UDim2.fromOffset(0, 18),
+		Size = UDim2.new(1, 0, 0, 20),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, f)
+	local track = make("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, 6),
+		BackgroundColor3 = hue and C.white or C.line,
+		BorderSizePixel = 0,
+	}, hit)
+	corner(track, 3)
+	local fill = make("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent, BorderSizePixel = 0 }, track)
+	corner(fill, 3)
+	if hue then
+		fill.Visible = false
+		make("UIGradient", { Color = HUE_SEQ }, track)
+	end
+	local knob = make("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(16, 16),
+		BackgroundColor3 = C.white,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, track)
+	corner(knob, 8)
+
+	local ctl = { track = track, knob = knob, lo = lo, hi = hi, step = step }
+	ctl.wheel = math.max(1, math.floor((hi - lo) / step / 25))
+	local current = get()
+	function ctl.show(v)
+		local a = (v - lo) / (hi - lo)
+		fill.Size = UDim2.fromScale(a, 1)
+		knob.Position = UDim2.fromScale(a, 0.5)
+		val.Text = fmtf(v)
+		if hue then
+			knob.BackgroundColor3 = Color3.fromHSV(math.clamp(v, 0, 0.999), 0.85, 1)
+		end
+	end
+	function ctl.apply(raw)
+		local v = lo + math.floor((raw - lo) / step + 0.5) * step
+		v = math.clamp(math.floor(v * 10000 + 0.5) / 10000, lo, hi)
+		if v == current then
+			return
+		end
+		current = v
+		set(v)
+		ctl.show(v)
+	end
+	function ctl.nudge(dir)
+		ctl.apply(current + dir * step * ctl.wheel)
+	end
+	ctl.show(current)
+
+	hit.InputBegan:Connect(function(input)
+		if isPress(input) then
+			s.drag = { ctl = ctl, input = input }
+			self.A.knobGrow(knob, true)
+			self:_dragTo(ctl, input)
+		end
+	end)
+	hit.MouseEnter:Connect(function()
+		s.hover = ctl
+	end)
+	hit.MouseLeave:Connect(function()
+		if s.hover == ctl then
+			s.hover = nil
+		end
+	end)
+	return ctl
+end
+
+function UI:_ctlToggle(order, text, get, set)
+	local f = make("TextButton", {
+		LayoutOrder = order,
+		Size = UDim2.new(1, 0, 0, 26),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, self.popScroll)
+	label(f, text, 26, 44).Size = UDim2.new(1, -44, 1, 0)
+	local track = make("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(34, 18),
+		BackgroundColor3 = C.line,
+		BorderSizePixel = 0,
+	}, f)
+	corner(track, 9)
+	local knob = make("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 2, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14),
+		BackgroundColor3 = C.white,
+		BorderSizePixel = 0,
+	}, track)
+	corner(knob, 7)
+	local function show(on, animate)
+		local kind = animate and "fast" or "instant"
+		self.A.tween(knob, kind, { Position = UDim2.new(0, on and 18 or 2, 0.5, 0) })
+		self.A.tween(track, kind, { BackgroundColor3 = on and C.accent or C.line })
+	end
+	show(get(), false)
+	f.MouseButton1Click:Connect(function()
+		local v = not get()
+		set(v)
+		show(v, true)
+	end)
+end
+
+function UI:_ctlChoice(order, text, choices, get, set)
+	local f = make("Frame", { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1 }, self.popScroll)
+	label(f, text, 26, 112).Size = UDim2.new(1, -112, 1, 0)
+	local btn = make("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(106, 22),
+		BackgroundColor3 = C.panel2,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = C.accent,
+		Text = tostring(get()),
+	}, f)
+	corner(btn, 7)
+	btn.MouseButton1Click:Connect(function()
+		local idx = 1
+		for i, c in ipairs(choices) do
+			if c == get() then
+				idx = i
+			end
+		end
+		local nextValue = choices[idx % #choices + 1]
+		set(nextValue)
+		btn.Text = tostring(nextValue)
+	end)
+end
+
+-- (re)builds the controls for a row, returns the height they need
+function UI:_fillPop(row)
+	local s = self.state
+	s.drag, s.hover = nil, nil
+	for _, ch in ipairs(self.popScroll:GetChildren()) do
+		if ch:IsA("GuiObject") then
+			ch:Destroy()
+		end
+	end
+	local n, total = 0, 14 -- 14 = the scroll frame's top + bottom padding
+	local function slot(height)
+		n += 1
+		total += height + (n > 1 and 6 or 0)
+		return n
+	end
+
+	if row.slider ~= "Unused" then
+		self:_ctlSlider(slot(38), row.slider, 0, 100, 1, function()
+			return row.value
+		end, function(v)
+			row.value = v
+			row.badge.Text = shown(row, v)
+			self.onChanged(row.id, row.on, v, row.optv)
+		end, function(v)
+			return shown(row, v)
+		end, false)
+	end
+
+	for _, d in ipairs(row.optDefs) do
+		local key = d.key
+		local function get()
+			return row.optv[key]
+		end
+		local function set(v)
+			row.optv[key] = v
+			self.onChanged(row.id, row.on, row.value, row.optv)
+		end
+		if d.type == "slider" or d.type == "hue" then
+			local hue = d.type == "hue"
+			self:_ctlSlider(slot(38), d.label, d.min or 0, d.max or (hue and 1 or 100), d.step or (hue and 0.01 or 1), get, set, function(v)
+				return fmtOpt(d, v)
+			end, hue)
+		elseif d.type == "toggle" then
+			self:_ctlToggle(slot(26), d.label, get, set)
+		elseif d.type == "choice" then
+			self:_ctlChoice(slot(26), d.label, d.choices, get, set)
+		end
+	end
+	return total
+end
+
+-- fills the popover and sizes it (capped to the screen, the controls scroll when they do not fit)
+function UI:_sizePop(row)
+	local content = self:_fillPop(row)
+	local vpY = self.gui.AbsoluteSize.Y
+	if vpY <= 0 then
+		vpY = 720
+	end
+	local maxH = vpY - 16
+	local h = math.min(POP_HEAD + content, maxH)
+	self.pop.Size = UDim2.fromOffset(POP_W, h)
+	self.popScroll.ScrollBarThickness = (POP_HEAD + content > maxH) and 3 or 0
+	self.popScroll.CanvasPosition = Vector2.zero
 end
 
 function UI:_openPop(row, pos)
 	local s = self.state
+	if row.slider == "Unused" and #row.optDefs == 0 then
+		return -- nothing to configure
+	end
 	if s.activeRow and s.activeRow ~= row then
 		self.A.highlightRow(s.activeRow, false)
 	end
 	s.activeRow = row
 	self.A.highlightRow(row, true)
-	self.popName.Text = row.slider
-	self:_setSliderVisual(row, row.value)
+	self.popName.Text = row.label
+	self:_sizePop(row)
 
-	local vp = self.gui.AbsoluteSize
-	local x = math.clamp(pos.X - POP_W / 2, 8, math.max(8, vp.X - POP_W - 8))
-	local y = math.clamp(pos.Y + 10, 8, math.max(8, vp.Y - POP_H - 8))
+	local origin, vp = self.gui.AbsolutePosition, self.gui.AbsoluteSize
+	local h = self.pop.Size.Y.Offset
+	local x = math.clamp(pos.X - origin.X - POP_W / 2, 8, math.max(8, vp.X - POP_W - 8))
+	local y = math.clamp(pos.Y - origin.Y + 10, 8, math.max(8, vp.Y - h - 8))
 	s.popOpen = true
 	self.scrim.Visible = true
 	self.A.popOpen(self.pop, x, y)
@@ -710,9 +993,7 @@ function UI:_closePop(silent)
 		return
 	end
 	s.popOpen = false
-	s.dragging = false
-	s.dragInput = nil
-	s.stepToken += 1
+	s.drag, s.hover = nil, nil
 	self.scrim.Visible = false
 	if s.activeRow then
 		self.A.highlightRow(s.activeRow, false)
@@ -728,38 +1009,36 @@ function UI:_closePop(silent)
 	end
 end
 
-function UI:_setValue(v)
-	local row = self.state.activeRow
-	if not row then
-		return
-	end
-	v = math.clamp(math.floor(v + 0.5), 0, 100)
-	if v == row.value then
-		return
-	end
-	row.value = v
-	row.badge.Text = shown(row, v)
-	self:_setSliderVisual(row, v)
-	self.onChanged(row.id, row.on, v)
-end
-
-function UI:_sliderFromInput(input)
+-- moves a slider to where the pointer is (works while the pointer is anywhere on screen)
+function UI:_dragTo(ctl, input)
 	local x
 	if input.UserInputType == Enum.UserInputType.Touch then
 		x = input.Position.X
 	else
 		x = UserInputService:GetMouseLocation().X
 	end
-	local track = self.popTrack
-	local w = math.max(1, track.AbsoluteSize.X)
-	self:_setValue((x - track.AbsolutePosition.X) / w * 100)
+	local w = math.max(1, ctl.track.AbsoluteSize.X)
+	ctl.apply(ctl.lo + (x - ctl.track.AbsolutePosition.X) / w * (ctl.hi - ctl.lo))
 end
 
-function UI:_nudge(delta)
-	local row = self.state.activeRow
-	if row then
-		self:_setValue(row.value + delta)
+-- puts a row back to its default (on / off, slider, every option) and tells the features
+function UI:_resetRow(row, animate)
+	row.on, row.value = row.defOn, row.defValue
+	for _, d in ipairs(row.optDefs) do
+		row.optv[d.key] = d.default -- in place: features keep a reference to this table
 	end
+	row.badge.Text = shown(row, row.value)
+	self.A.setSwitch(row, animate, C)
+	self.onChanged(row.id, row.on, row.value, row.optv)
+end
+
+function UI:resetAll()
+	for _, row in ipairs(self.rowList) do
+		if not row.button then
+			self:_resetRow(row, true)
+		end
+	end
+	self:refreshStatus()
 end
 
 ---------------------------------------------------------------------
@@ -944,54 +1223,28 @@ function UI:_bindInput()
 		end
 	end))
 
-	-- slider track: press jumps to the pointer, then drag follows it anywhere on screen
-	table.insert(conns, self.popHit.InputBegan:Connect(function(input)
-		if isPress(input) then
-			s.dragging = true
-			s.dragInput = input
-			self.A.knobGrow(self.popKnob, true)
-			self:_sliderFromInput(input)
-		end
-	end))
-
+	-- dragging a slider keeps following the pointer even when it leaves the popover; the wheel over a slider nudges it
 	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not s.dragging then
-			return
-		end
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input == s.dragInput then
-			self:_sliderFromInput(s.dragInput or input)
+		if s.drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input == s.drag.input) then
+			self:_dragTo(s.drag.ctl, s.drag.input)
+		elseif input.UserInputType == Enum.UserInputType.MouseWheel and s.hover then
+			s.hover.nudge(input.Position.Z > 0 and 1 or -1)
 		end
 	end))
-
-	-- -/+ buttons, hold to repeat
-	local function bindStep(btn, delta)
-		table.insert(conns, btn.InputBegan:Connect(function(input)
-			if not isPress(input) then
-				return
-			end
-			s.stepToken += 1
-			local token = s.stepToken
-			self:_nudge(delta)
-			task.spawn(function()
-				task.wait(CFG.RepeatDelay)
-				while s.stepToken == token and s.popOpen do
-					self:_nudge(delta)
-					task.wait(CFG.RepeatRate)
-				end
-			end)
-		end))
-	end
-	bindStep(self.popMinus, -1)
-	bindStep(self.popPlus, 1)
 
 	table.insert(conns, UserInputService.InputEnded:Connect(function(input)
-		if isPress(input) then
-			if s.dragging then
-				s.dragging = false
-				s.dragInput = nil
-				self.A.knobGrow(self.popKnob, false)
-			end
-			s.stepToken += 1
+		if isPress(input) and s.drag then
+			self.A.knobGrow(s.drag.ctl.knob, false)
+			s.drag = nil
+		end
+	end))
+
+	table.insert(conns, self.popReset.MouseButton1Click:Connect(function()
+		local row = s.activeRow
+		if row then
+			self:_resetRow(row, true)
+			self:refreshStatus()
+			self:_sizePop(row)
 		end
 	end))
 

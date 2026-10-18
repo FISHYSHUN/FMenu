@@ -1,7 +1,8 @@
 -- ModuleScript: Functionality
 -- Feature registry. A feature is keyed by the same id a row uses in Games.lua:
 --   { init = function(ctx, hudGui) end,   -- optional, runs once (build hud elements, snapshot originals)
---     set  = function(enabled, value, ctx) end,  -- runs on toggle and on slider change (value 0-100)
+--     set  = function(enabled, value, ctx, opts) end,  -- runs on toggle, slider or option change
+--                                                      -- (value 0-100, opts = the right-click menu values by key, a live table)
 --     step = function(dt, ctx) end,        -- optional, runs every RenderStepped
 --     destroy = function() end }           -- optional, extra cleanup (set(false) is already called for you)
 -- ctx = { ui, animations, profileName, notify(text, color?), hud }
@@ -13,6 +14,10 @@ local import = ...
 local Util = import("Util")
 local ESP = import("ESP")
 local Defense = import("Defense")
+<<<<<<< Updated upstream
+=======
+local Troll = import("Troll")
+>>>>>>> Stashed changes
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -34,7 +39,11 @@ local toasts = nil
 local conn = nil
 local hudConns = {}
 local positions = {} -- hud key -> Vector2 (where the user dragged it), survives toggling
+<<<<<<< Updated upstream
 local dragging = nil -- { info, key, input, grab }
+=======
+local dragging = nil -- { info, key, input, start, from }
+>>>>>>> Stashed changes
 local hudLocked, notifyOn = false, true
 local huds = {} -- every draggable label, so they can be pulled back on screen after a resize
 
@@ -69,6 +78,29 @@ function Functionality.hudPos(side, row, width)
 	return Vector2.new(x, GuiService:GetGuiInset().Y + 12 + (row or 0) * 28)
 end
 
+-- where the user dragged each label, for saving / loading: { key = { x, y } }
+function Functionality.getPositions()
+	local out = {}
+	for key, p in pairs(positions) do
+		out[key] = { math.floor(p.X + 0.5), math.floor(p.Y + 0.5) }
+	end
+	return out
+end
+
+function Functionality.setPositions(t)
+	table.clear(positions)
+	if type(t) == "table" then
+		for key, p in pairs(t) do
+			if type(p) == "table" and type(p[1]) == "number" and type(p[2]) == "number" then
+				positions[key] = Vector2.new(p[1], p[2])
+			end
+		end
+	end
+	for _, info in ipairs(huds) do
+		info.place()
+	end
+end
+
 -- Makes a HUD element draggable (mouse or touch). Until the user moves it, it sits at its default spot
 -- (side = "left" | "right", row = how far down the stack); after that it stays where it was put.
 function Functionality.draggable(obj, key, side, row)
@@ -85,7 +117,20 @@ function Functionality.draggable(obj, key, side, row)
 	obj:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
 	obj.InputBegan:Connect(function(input)
 		if isPress(input) and not hudLocked then
+<<<<<<< Updated upstream
 			dragging = { info = info, key = key, input = input, grab = Util.pointer(input) - obj.AbsolutePosition }
+=======
+			-- Delta based: remember where the pointer and the label were when the press started and move the label
+			-- by how far the pointer has travelled since. Mixing AbsolutePosition (screen space) with Position
+			-- (relative to the HUD gui) is what used to make labels jump away from the cursor.
+			dragging = {
+				info = info,
+				key = key,
+				input = input,
+				start = Util.pointer(input),
+				from = Vector2.new(obj.Position.X.Offset, obj.Position.Y.Offset),
+			}
+>>>>>>> Stashed changes
 		end
 	end)
 	info.place = place
@@ -108,10 +153,29 @@ local function hudLabel(name, color, font)
 		Visible = false,
 		Text = "",
 	}, hudGui)
+	l:SetAttribute("baseColor", l.TextColor3)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, l)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, l)
 	make("UISizeConstraint", { MinSize = Vector2.new(72, 22) }, l)
 	return l
+end
+
+-- text size, background opacity and tint from a HUD row's right-click options (noBg: the caller sets the background)
+local function styleHud(label, o, noBg)
+	if not label then
+		return
+	end
+	if o.textSize then
+		label.TextSize = o.textSize
+	end
+	if o.bg and not noBg then
+		label.BackgroundTransparency = 1 - o.bg
+	end
+	if o.tint then
+		label.TextColor3 = Color3.fromHSV(o.hue or 0, 0.75, 1)
+	else
+		label.TextColor3 = label:GetAttribute("baseColor") or label.TextColor3
+	end
 end
 
 -- fps / ping / clock: draggable, start stacked on the right
@@ -134,17 +198,18 @@ do
 			label.Text = "FMenu | " .. c.profileName
 			Functionality.draggable(label, "Overlay", "left", 0)
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			label.Visible = on
 			label.TextTransparency = 1 - v / 100
-			label.BackgroundTransparency = 1 - 0.65 * v / 100
+			label.BackgroundTransparency = 1 - (o.bg or 0.65) * v / 100
+			styleHud(label, o, true)
 		end,
 	}
 end
 
--- crosshair: value = size (4 to 40 px)
+-- crosshair: value = size (4 to 40 px), options = thickness, opacity, color
 do
-	local holder
+	local holder, horiz, vert
 	features.crosshair = {
 		init = function()
 			holder = make("Frame", {
@@ -155,19 +220,28 @@ do
 				BackgroundTransparency = 1,
 				Visible = false,
 			}, hudGui)
-			make("Frame", {
+			horiz = make("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0,
 			}, holder)
-			make("Frame", {
+			vert = make("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.new(0, 2, 1, 0), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0,
 			}, holder)
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			holder.Visible = on
 			local size = 4 + v * 0.36
 			holder.Size = UDim2.fromOffset(size, size)
+			local t = o.thickness or 2
+			horiz.Size = UDim2.new(1, 0, 0, t)
+			vert.Size = UDim2.new(0, t, 1, 0)
+			local color = o.tint and Color3.fromHSV(o.hue or 0, 0.85, 1) or Color3.fromRGB(255, 255, 255)
+			local transparency = 1 - (o.alpha or 1)
+			for _, f in ipairs({ horiz, vert }) do
+				f.BackgroundColor3 = color
+				f.BackgroundTransparency = transparency
+			end
 		end,
 	}
 end
@@ -179,10 +253,11 @@ do
 		init = function()
 			label = statLabel("Fps", 0)
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			enabled = on
 			label.Visible = on
 			interval = 1 / (1 + 9 * v / 100)
+			styleHud(label, o)
 		end,
 		step = function(dt)
 			if not enabled then
@@ -205,10 +280,11 @@ do
 		init = function()
 			label = statLabel("Ping", 1)
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			enabled = on
 			label.Visible = on
 			interval = 1 / (1 + 9 * v / 100)
+			styleHud(label, o)
 		end,
 		step = function(dt)
 			if not enabled then
@@ -233,11 +309,12 @@ do
 		init = function()
 			label = statLabel("Clock", 2)
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			enabled = on
 			twelve = v >= 50
 			label.Visible = on
 			acc = 1
+			styleHud(label, o)
 		end,
 		step = function(dt)
 			if not enabled then
@@ -375,22 +452,25 @@ do
 	}
 end
 
--- fly: WASD + camera direction, Space up, Shift/Ctrl down. value = speed 20 to 200
+-- fly: WASD + camera direction, Space up, Shift/Ctrl down. value = speed 20 to 200.
+-- options: up / down speed multiplier, smoothing (0 = instant, higher = floatier)
 do
-	local enabled, speed, bv = false, 60, nil
+	local enabled, speed, bv, cfg, cur = false, 60, nil, {}, Vector3.zero
 	local function stop()
 		if bv then
 			bv:Destroy()
 			bv = nil
 		end
+		cur = Vector3.zero
 		local hum = Util.humanoid()
 		if hum then
 			hum.PlatformStand = false
 		end
 	end
 	features.fly = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			speed = lerp(20, 200, v)
+			cfg = o
 			if on == enabled then
 				return
 			end
@@ -399,7 +479,7 @@ do
 				stop()
 			end
 		end,
-		step = function()
+		step = function(dt)
 			if not enabled then
 				return
 			end
@@ -428,18 +508,41 @@ do
 			if dir.Magnitude == 0 and hum.MoveDirection.Magnitude > 0 then
 				dir = hum.MoveDirection -- touch / gamepad
 			end
-			if k:IsKeyDown(Enum.KeyCode.Space) or hum.Jump then dir += Vector3.yAxis end
-			if k:IsKeyDown(Enum.KeyCode.LeftShift) or k:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.yAxis end
-			bv.Velocity = dir.Magnitude > 0 and dir.Unit * speed or Vector3.zero
+			local up = 0
+			if k:IsKeyDown(Enum.KeyCode.Space) or hum.Jump then up += 1 end
+			if k:IsKeyDown(Enum.KeyCode.LeftShift) or k:IsKeyDown(Enum.KeyCode.LeftControl) then up -= 1 end
+
+			local want = (dir.Magnitude > 0 and dir.Unit * speed or Vector3.zero) + Vector3.yAxis * up * speed * (cfg.vert or 1)
+			local smooth = cfg.smooth or 0
+			if smooth <= 0 then
+				cur = want
+			else
+				cur = cur:Lerp(want, 1 - math.exp(-dt * (30 - 27 * smooth)))
+			end
+			bv.Velocity = cur
 		end,
 	}
 end
 
--- clicktp: Ctrl + click teleports to the clicked spot
+-- clicktp: hold a key (option) and click to teleport to the clicked spot
 do
 	local bag = Util.bag()
+	local cfg = {}
+	local function modifierHeld()
+		local k = UserInputService
+		local name = cfg.key or "Ctrl"
+		if name == "None" then
+			return true
+		elseif name == "Alt" then
+			return k:IsKeyDown(Enum.KeyCode.LeftAlt) or k:IsKeyDown(Enum.KeyCode.RightAlt)
+		elseif name == "Shift" then
+			return k:IsKeyDown(Enum.KeyCode.LeftShift) or k:IsKeyDown(Enum.KeyCode.RightShift)
+		end
+		return k:IsKeyDown(Enum.KeyCode.LeftControl) or k:IsKeyDown(Enum.KeyCode.RightControl)
+	end
 	features.clicktp = {
-		set = function(on)
+		set = function(on, _v, _c, o)
+			cfg = o
 			bag:clean()
 			if on then
 				local mouse = lp:GetMouse()
@@ -447,12 +550,12 @@ do
 					if processed or input.UserInputType ~= Enum.UserInputType.MouseButton1 then
 						return
 					end
-					if not UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+					if not modifierHeld() then
 						return
 					end
 					local root = Util.root()
 					if root and mouse.Hit then
-						root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+						root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, cfg.lift or 3, 0))
 					end
 				end))
 			end
@@ -464,22 +567,32 @@ end
 -- visual features
 ---------------------------------------------------------------------
 
--- esp: highlight + name / distance / health on every other player. value = max distance 100 to 2000
+-- esp: highlight + name / distance / health on every other player. value = max distance 100 to 2000.
+-- Everything about how it looks comes from the row's right-click options (esp:configure).
 do
 	local esp
 	features.esp = {
 		init = function()
 			esp = ESP.new({
 				maxDistance = 1000,
+<<<<<<< Updated upstream
 				resolve = function(plr, char, dist)
 					if Util.flags.hideTeam and Util.isTeammate(plr) then
 						return nil
 					end
 					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90)), ESP.text(plr, char, dist)
+=======
+				resolve = function(plr, char, dist, style)
+					if style.hideTeam and Util.isTeammate(plr) then
+						return nil
+					end
+					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90), style), ESP.text(plr, char, dist, nil, style)
+>>>>>>> Stashed changes
 				end,
 			})
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
+			esp:configure(o)
 			esp:setDistance(lerp(100, 2000, v))
 			esp:setEnabled(on)
 		end,
@@ -494,9 +607,10 @@ do
 	}
 end
 
--- tracers: line from the bottom of the screen to every player. value = thickness 1 to 4
+-- tracers: line from the bottom / middle / top of the screen to every player. value = thickness 1 to 4
 do
 	local enabled, thickness, lines = false, 1, {}
+	local style = ESP.newStyle()
 	local function newLine()
 		local f = make("Frame", {
 			Name = "Tracer",
@@ -509,7 +623,8 @@ do
 		return f
 	end
 	features.tracers = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
+			ESP.configure(style, o)
 			enabled = on
 			thickness = lerp(1, 4, v)
 			if not on then
@@ -524,11 +639,19 @@ do
 			end
 			local cam = workspace.CurrentCamera
 			local vp = cam.ViewportSize
+<<<<<<< Updated upstream
 			local from = ESP.style.tracerFrom
 			local origin = Vector2.new(vp.X / 2, from == "top" and 0 or (from == "center" and vp.Y / 2 or vp.Y))
 			local used = 0
 			for _, plr in ipairs(Players:GetPlayers()) do
 				if plr ~= lp and Util.isAlive(plr.Character) and not (Util.flags.hideTeam and Util.isTeammate(plr)) then
+=======
+			local from = style.tracerFrom
+			local origin = Vector2.new(vp.X / 2, from == "Top" and 0 or (from == "Center" and vp.Y / 2 or vp.Y))
+			local used = 0
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= lp and Util.isAlive(plr.Character) and not (style.hideTeam and Util.isTeammate(plr)) then
+>>>>>>> Stashed changes
 					local root = Util.rootOf(plr.Character)
 					if root then
 						local p, onScreen = cam:WorldToViewportPoint(root.Position)
@@ -541,7 +664,12 @@ do
 							line.Size = UDim2.fromOffset(delta.Magnitude, thickness)
 							line.Position = UDim2.fromOffset(mid.X, mid.Y)
 							line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+<<<<<<< Updated upstream
 							line.BackgroundColor3 = ESP.color(plr, plr.Character, Color3.fromRGB(255, 90, 90))
+=======
+							line.BackgroundColor3 = ESP.color(plr, plr.Character, Color3.fromRGB(255, 90, 90), style)
+							line.BackgroundTransparency = 1 - style.alpha
+>>>>>>> Stashed changes
 							line.Visible = true
 						end
 					end
@@ -733,9 +861,16 @@ do
 		init = function()
 			label = statLabel("Coords", 3)
 		end,
+<<<<<<< Updated upstream
 		set = function(on)
 			enabled = on
 			label.Visible = on
+=======
+		set = function(on, _v, _c, o)
+			enabled = on
+			label.Visible = on
+			styleHud(label, o)
+>>>>>>> Stashed changes
 		end,
 		step = function(dt)
 			if not enabled then
@@ -761,9 +896,16 @@ do
 		init = function()
 			label = statLabel("Speed", 4)
 		end,
+<<<<<<< Updated upstream
 		set = function(on)
 			enabled = on
 			label.Visible = on
+=======
+		set = function(on, _v, _c, o)
+			enabled = on
+			label.Visible = on
+			styleHud(label, o)
+>>>>>>> Stashed changes
 		end,
 		step = function(dt)
 			if not enabled then
@@ -856,7 +998,11 @@ do
 	}
 end
 
+<<<<<<< Updated upstream
 -- box ESP: boxes that scale with distance, honours "hide teammates"
+=======
+-- box ESP: boxes that scale with distance. Look comes from the row's right-click options.
+>>>>>>> Stashed changes
 do
 	local esp
 	features.boxes = {
@@ -864,6 +1010,7 @@ do
 			esp = ESP.new({
 				make = ESP.box,
 				maxDistance = 1000,
+<<<<<<< Updated upstream
 				resolve = function(plr, char, dist)
 					if Util.flags.hideTeam and Util.isTeammate(plr) then
 						return nil
@@ -873,6 +1020,18 @@ do
 			})
 		end,
 		set = function(on, v)
+=======
+				resolve = function(plr, char, dist, style)
+					if style.hideTeam and Util.isTeammate(plr) then
+						return nil
+					end
+					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90), style), ESP.text(plr, char, dist, nil, style)
+				end,
+			})
+		end,
+		set = function(on, v, _c, o)
+			esp:configure(o)
+>>>>>>> Stashed changes
 			esp:setDistance(lerp(100, 2000, v))
 			esp:setEnabled(on)
 		end,
@@ -887,6 +1046,7 @@ do
 	}
 end
 
+<<<<<<< Updated upstream
 -- ESP style rows: they only write into ESP.style, every ESP re-reads it on its next update
 do
 	local style = ESP.style
@@ -923,6 +1083,8 @@ features.hideteam = {
 	end,
 }
 
+=======
+>>>>>>> Stashed changes
 -- hold C to zoom the camera (value = zoom FOV)
 do
 	local enabled, zoomFov, base = false, 30, nil
@@ -973,24 +1135,44 @@ do
 	}
 end
 
+<<<<<<< Updated upstream
 -- auto clicker: hold left mouse and it clicks at the slider rate
 do
 	local enabled, interval, last = false, 0.1, 0
 	features.autoclick = {
 		set = function(on, v)
 			enabled = on
+=======
+-- auto clicker: clicks at the slider rate. Option "only while holding" (default) = hold left mouse, off = always
+do
+	local enabled, interval, last, cfg = false, 0.1, 0, {}
+	features.autoclick = {
+		set = function(on, v, _c, o)
+			enabled = on
+			cfg = o
+>>>>>>> Stashed changes
 			interval = 1 / lerp(4, 30, v)
 		end,
 		step = function()
 			if not enabled or not mouse1click or UserInputService:GetFocusedTextBox() then
 				return
 			end
+<<<<<<< Updated upstream
 			if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
 				local now = os.clock()
 				if now - last >= interval then
 					last = now
 					mouse1click()
 				end
+=======
+			if cfg.hold ~= false and not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+				return
+			end
+			local now = os.clock()
+			if now - last >= interval then
+				last = now
+				mouse1click()
+>>>>>>> Stashed changes
 			end
 		end,
 	}
@@ -999,6 +1181,42 @@ end
 ---------------------------------------------------------------------
 -- menu features
 ---------------------------------------------------------------------
+
+-- saving: autosave switch and two buttons (the config object comes from the loader through ctx.config)
+features.autosave = {
+	set = function(on, _v, c)
+		if c.config then
+			c.config.autosave = on
+		end
+	end,
+}
+features.cfgSave = {
+	set = function(on, _v, c)
+		if not on or not c.config then
+			return
+		end
+		if not c.config:available() then
+			c.notify("your executor has no file access, nothing can be saved", Color3.fromRGB(255, 84, 96))
+		elseif c.config:save() then
+			c.notify("config saved", Color3.fromRGB(72, 214, 134))
+		else
+			c.notify("saving failed (see output)", Color3.fromRGB(255, 84, 96))
+		end
+	end,
+}
+features.cfgReset = {
+	set = function(on, _v, c)
+		if not on then
+			return
+		end
+		c.ui:resetAll()
+		Functionality.resetPositions()
+		if c.config then
+			c.config:touch()
+		end
+		c.notify("everything reset to defaults", Color3.fromRGB(255, 214, 64))
+	end,
+}
 
 -- reducedMotion: kills menu animations (instant transitions)
 features.reducedMotion = {
@@ -1116,7 +1334,7 @@ function Functionality.init(c)
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseMovement or input == dragging.input then
-			local p = clampPos(dragging.info.obj, Util.pointer(dragging.input) - dragging.grab)
+			local p = clampPos(dragging.info.obj, dragging.from + (Util.pointer(dragging.input) - dragging.start))
 			positions[dragging.key] = p
 			dragging.info.obj.Position = UDim2.fromOffset(p.X, p.Y)
 		end
@@ -1124,6 +1342,9 @@ function Functionality.init(c)
 	hudConns[#hudConns + 1] = UserInputService.InputEnded:Connect(function(input)
 		if dragging and isPress(input) then
 			dragging = nil
+			if Functionality.onHudMoved then
+				Functionality.onHudMoved() -- saves the new spot
+			end
 		end
 	end)
 	-- screen resized: pull every label back on screen
@@ -1162,14 +1383,19 @@ function Functionality.init(c)
 	end)
 end
 
-function Functionality.set(id, enabled, value)
+function Functionality.resetPositions()
+	Functionality.setPositions(nil)
+end
+
+function Functionality.set(id, enabled, value, opts)
 	local def = features[id]
 	if not def then
 		warn(("[FMenu] no feature registered for row '%s'"):format(id))
 		return
 	end
-	state[id] = { on = enabled, value = value }
-	local ok, err = pcall(def.set, enabled, value, ctx)
+	opts = opts or {}
+	state[id] = { on = enabled, value = value, opts = opts }
+	local ok, err = pcall(def.set, enabled, value, ctx, opts)
 	if not ok then
 		warn(("[FMenu] feature '%s' failed: %s"):format(id, tostring(err)))
 	end
@@ -1184,7 +1410,7 @@ function Functionality.destroy()
 	for id, st in pairs(state) do
 		local def = features[id]
 		if def and st.on then
-			pcall(def.set, false, st.value, ctx)
+			pcall(def.set, false, st.value, ctx, st.opts)
 		end
 	end
 	for _, def in pairs(features) do
@@ -1209,4 +1435,12 @@ for id, def in pairs(Defense.features) do
 	features[id] = def
 end
 
+<<<<<<< Updated upstream
+=======
+-- trolling (src/Troll.lua)
+for id, def in pairs(Troll.features) do
+	features[id] = def
+end
+
+>>>>>>> Stashed changes
 return Functionality

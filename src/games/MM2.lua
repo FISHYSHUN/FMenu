@@ -53,13 +53,23 @@ local MM2 = {
 	name = "Murder Mystery 2",
 	tab = { name = "MM2", rows = {
 		{ header = "ESP & alerts" },
+<<<<<<< Updated upstream
 		{ id = "mm2Esp", label = "Role ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st") },
+=======
+		{ id = "mm2Esp", label = "Role ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st"), opts = ESP.options("role") },
+>>>>>>> Stashed changes
 		{ id = "mm2Alert", label = "Role alerts", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Gun", label = "Gun drop ESP", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Warn", label = "Murderer distance", slider = "Warn distance", value = 40, on = false, fmt = range(10, 100, " st") },
 		{ header = "Actions" },
 		{ id = "mm2Grab", label = "Auto grab gun", slider = "Unused", value = 0, on = false },
+<<<<<<< Updated upstream
 		{ id = "mm2Coins", label = "Coin collect", slider = "Range", value = 40, on = false, fmt = range(30, 500, " st") },
+=======
+		{ id = "mm2Coins", label = "Coin collect", slider = "Range", value = 40, on = false, fmt = range(30, 500, " st"), opts = {
+			{ type = "slider", key = "interval", label = "Collect every", min = 0.25, max = 3, step = 0.25, unit = "s", default = 1 },
+		} },
+>>>>>>> Stashed changes
 		{ id = "mm2Spec", label = "Watch murderer", slider = "Unused", value = 0, on = false },
 	} },
 	features = {},
@@ -73,13 +83,18 @@ do
 		init = function()
 			esp = ESP.new({
 				maxDistance = 1000,
-				resolve = function(plr, _char, dist)
+				resolve = function(plr, char, dist, style)
 					local role = roleOf(plr)
+<<<<<<< Updated upstream
 					return COLORS[role], ESP.text(plr, _char, dist, "[" .. LABELS[role] .. "]")
+=======
+					return COLORS[role], ESP.text(plr, char, dist, "[" .. LABELS[role] .. "]", style)
+>>>>>>> Stashed changes
 				end,
 			})
 		end,
-		set = function(on, v)
+		set = function(on, v, _c, o)
+			esp:configure(o)
 			esp:setDistance(Util.lerp(100, 2000, v))
 			esp:setEnabled(on)
 		end,
@@ -223,10 +238,11 @@ end
 
 -- coin collect: touches every coin inside the range slider. Needs firetouchinterest.
 do
-	local on, acc, radius, warned = false, 0, 100, false
+	local on, acc, radius, warned, cfg = false, 0, 100, false, {}
 	features.mm2Coins = {
-		set = function(enabled, v, ctx)
+		set = function(enabled, v, ctx, o)
 			on = enabled
+			cfg = o
 			radius = Util.lerp(30, 500, v)
 			if enabled and not fti and not warned then
 				warned = true
@@ -238,7 +254,7 @@ do
 				return
 			end
 			acc += dt
-			if acc < 1 then
+			if acc < (cfg.interval or 1) then
 				return
 			end
 			acc = 0

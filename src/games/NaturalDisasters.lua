@@ -25,7 +25,13 @@ local NDS = {
 		{ id = "ndStatus", label = "Disaster HUD", slider = "Scan speed", value = 40, on = false, fmt = range(0.5, 4, "/s") },
 		{ id = "ndAlert", label = "Disaster alert", slider = "Unused", value = 0, on = false },
 		{ header = "Safety" },
+<<<<<<< Updated upstream
 		{ id = "ndSky", label = "Sky platform", slider = "Height", value = 40, on = false, fmt = range(150, 1000, " st") },
+=======
+		{ id = "ndSky", label = "Sky platform", slider = "Height", value = 40, on = false, fmt = range(150, 1000, " st"), opts = {
+			{ type = "slider", key = "size", label = "Platform size", min = 30, max = 300, step = 10, unit = " st", default = 80 },
+		} },
+>>>>>>> Stashed changes
 		{ id = "ndAir", label = "Air floor", slider = "Lift above you", value = 20, on = false, fmt = range(5, 100, " st") },
 		{ id = "ndNoFall", label = "No fall damage", slider = "Max fall speed", value = 30, on = false, fmt = range(30, 120) },
 	} },
@@ -113,7 +119,7 @@ end
 do
 	local platform, origin = nil, nil
 	features.ndSky = {
-		set = function(on, v)
+		set = function(on, v, _c, o)
 			local root = Util.root()
 			if on then
 				if not root then
@@ -124,13 +130,14 @@ do
 					platform = Util.make("Part", {
 						Name = "FMenuPlatform",
 						Anchored = true,
-						Size = Vector3.new(80, 2, 80),
+						Size = Vector3.new(o.size or 80, 2, o.size or 80),
 						Material = Enum.Material.ForceField,
 						Color = Color3.fromRGB(139, 125, 255),
 						Transparency = 0.5,
 						CastShadow = false,
 					}, workspace)
 				end
+				platform.Size = Vector3.new(o.size or 80, 2, o.size or 80)
 				platform.Position = origin.Position + Vector3.new(0, Util.lerp(150, 1000, v), 0)
 				root.CFrame = platform.CFrame + Vector3.new(0, 4, 0)
 			else
