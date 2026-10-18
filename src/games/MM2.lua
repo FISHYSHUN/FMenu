@@ -52,12 +52,14 @@ end
 local MM2 = {
 	name = "Murder Mystery 2",
 	tab = { name = "MM2", rows = {
+		{ header = "ESP & alerts" },
 		{ id = "mm2Esp", label = "Role ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st") },
 		{ id = "mm2Alert", label = "Role alerts", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Gun", label = "Gun drop ESP", slider = "Unused", value = 0, on = false },
+		{ id = "mm2Warn", label = "Murderer distance", slider = "Warn distance", value = 40, on = false, fmt = range(10, 100, " st") },
+		{ header = "Actions" },
 		{ id = "mm2Grab", label = "Auto grab gun", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Coins", label = "Coin collect", slider = "Range", value = 40, on = false, fmt = range(30, 500, " st") },
-		{ id = "mm2Warn", label = "Murderer distance", slider = "Warn distance", value = 40, on = false, fmt = range(10, 100, " st") },
 		{ id = "mm2Spec", label = "Watch murderer", slider = "Unused", value = 0, on = false },
 	} },
 	features = {},
@@ -73,7 +75,7 @@ do
 				maxDistance = 1000,
 				resolve = function(plr, _char, dist)
 					local role = roleOf(plr)
-					return COLORS[role], ("%s [%s] %dm"):format(plr.DisplayName, LABELS[role], math.floor(dist))
+					return COLORS[role], ESP.text(plr, _char, dist, "[" .. LABELS[role] .. "]")
 				end,
 			})
 		end,
