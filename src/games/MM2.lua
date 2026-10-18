@@ -57,6 +57,8 @@ local MM2 = {
 		{ id = "mm2Gun", label = "Gun drop ESP", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Grab", label = "Auto grab gun", slider = "Unused", value = 0, on = false },
 		{ id = "mm2Coins", label = "Coin collect", slider = "Range", value = 40, on = false, fmt = range(30, 500, " st") },
+		{ id = "mm2Warn", label = "Murderer distance", slider = "Warn distance", value = 40, on = false, fmt = range(10, 100, " st") },
+		{ id = "mm2Spec", label = "Watch murderer", slider = "Unused", value = 0, on = false },
 	} },
 	features = {},
 }
@@ -249,6 +251,98 @@ do
 				end
 			end
 		end,
+	}
+end
+
+-- murderer distance: draggable readout, turns red and toasts once when the murderer gets within range
+do
+	local label, enabled, acc, radius, inRange = nil, false, 0, 40, false
+	local WHITE = Color3.fromRGB(236, 238, 244)
+	features.mm2Warn = {
+		init = function(ctx)
+			label = ctx.hudLabel("MurdererDist", WHITE, Enum.Font.GothamBold)
+			ctx.draggable(label, "MurdererDist", "left", 1)
+		end,
+		set = function(on, v)
+			enabled = on
+			radius = Util.lerp(10, 100, v)
+			label.Visible = on
+			inRange = false
+		end,
+		step = function(dt, ctx)
+			if not enabled then
+				return
+			end
+			acc += dt
+			if acc < 0.1 then
+				return
+			end
+			acc = 0
+			local murderer
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= lp and roleOf(plr) == "murderer" and Util.isAlive(plr.Character) then
+					murderer = plr
+					break
+				end
+			end
+			local root, mroot = Util.root(), murderer and Util.rootOf(murderer.Character)
+			if not (root and mroot) then
+				label.Text = "murderer: --"
+				label.TextColor3 = WHITE
+				inRange = false
+				return
+			end
+			local dist = (root.Position - mroot.Position).Magnitude
+			local close = dist <= radius
+			label.Text = ("murderer  %d st"):format(math.floor(dist))
+			label.TextColor3 = close and COLORS.murderer or WHITE
+			if close and not inRange then
+				ctx.notify("murderer is close", COLORS.murderer)
+			end
+			inRange = close
+		end,
+	}
+end
+
+-- watch murderer: camera follows the murderer, goes back to you when they are gone or this is turned off
+do
+	local enabled, acc = false, 0
+	local function restore()
+		local cam, hum = workspace.CurrentCamera, Util.humanoid()
+		if cam and hum then
+			cam.CameraSubject = hum
+		end
+	end
+	features.mm2Spec = {
+		set = function(on)
+			enabled = on
+			acc = 1
+			if not on then
+				restore()
+			end
+		end,
+		step = function(dt)
+			if not enabled then
+				return
+			end
+			acc += dt
+			if acc < 0.25 then
+				return
+			end
+			acc = 0
+			local cam = workspace.CurrentCamera
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= lp and roleOf(plr) == "murderer" and Util.isAlive(plr.Character) then
+					local hum = Util.humanoid(plr.Character)
+					if cam and hum then
+						cam.CameraSubject = hum
+						return
+					end
+				end
+			end
+			restore()
+		end,
+		destroy = restore,
 	}
 end
 
