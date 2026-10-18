@@ -109,6 +109,17 @@ local function shown(row, v)
 	return tostring(v)
 end
 
+-- a saved key name that still exists as an Enum.KeyCode (nil otherwise)
+local function validKey(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+	local ok, code = pcall(function()
+		return Enum.KeyCode[name]
+	end)
+	return ok and code and name or nil
+end
+
 -- text for an option control's value
 local function fmtOpt(d, v)
 	if d.fmt then
@@ -174,9 +185,14 @@ function UI.new(deps)
 	self.expanded = Vector2.new(CFG.Width, 246) -- real height is set per tab once the rows exist
 	self.tabNatural = {} -- tab index -> height its sections need
 	self.surfaceT = 0 -- background transparency of the menu surfaces (see UI:setOpacity)
+	self.alpha = 1 -- menu opacity, 1 = solid. Everything registered with UI:_surface follows it.
+	self.surfaces = setmetatable({}, { __mode = "k" }) -- gui object -> its transparency at full opacity
 	self._conns = {}
 
 	self:_buildShell()
+	for _, inst in ipairs({ self.root, self.barGroup, self.tabBar, self.popReset }) do
+		self:_surface(inst)
+	end
 	self:_bindInput()
 	return self
 end
@@ -547,6 +563,7 @@ function UI:_buildRow(data, order, parent, tabIndex)
 		optv = {},
 		defOn = data.defOn,
 		defValue = data.defValue or data.value,
+		bind = validKey(data.bind),
 	}
 	if row.defOn == nil then
 		row.defOn = data.on == true
@@ -569,6 +586,7 @@ function UI:_buildRow(data, order, parent, tabIndex)
 	}, parent)
 	corner(btn, 10)
 	row.btn = btn
+	self:_surface(btn)
 	row.stroke = make("UIStroke", {
 		Color = C.accent, Thickness = 1, Transparency = 1,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
@@ -609,6 +627,7 @@ function UI:_buildRow(data, order, parent, tabIndex)
 		TextColor3 = C.muted,
 	}, btn)
 	corner(row.badge, 6)
+	self:_surface(row.badge)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, row.badge)
 
 	row.track = make("Frame", {
@@ -651,20 +670,7 @@ function UI:_buildRow(data, order, parent, tabIndex)
 			longFired = false
 			return
 		end
-		if row.button then
-			self.A.highlightRow(row, true)
-			task.delay(0.25, function()
-				self.A.highlightRow(row, false)
-			end)
-			self.onChanged(row.id, true, row.value, row.optv)
-			self:_startCountdown()
-			return
-		end
-		row.on = not row.on
-		self.A.setSwitch(row, true, C)
-		self.onChanged(row.id, row.on, row.value, row.optv)
-		self:refreshStatus()
-		self:_startCountdown()
+		self:_activate(row)
 	end))
 
 	-- right click = slider popover
@@ -887,6 +893,7 @@ function UI:_ctlChoice(order, text, choices, get, set)
 		Text = tostring(get()),
 	}, f)
 	corner(btn, 7)
+	self:_surface(btn)
 	btn.MouseButton1Click:Connect(function()
 		local idx = 1
 		for i, c in ipairs(choices) do
@@ -903,7 +910,7 @@ end
 -- (re)builds the controls for a row, returns the height they need
 function UI:_fillPop(row)
 	local s = self.state
-	s.drag, s.hover = nil, nil
+	s.drag, s.hover, s.binding = nil, nil, nil
 	for _, ch in ipairs(self.popScroll:GetChildren()) do
 		if ch:IsA("GuiObject") then
 			ch:Destroy()
@@ -948,7 +955,52 @@ function UI:_fillPop(row)
 			self:_ctlChoice(slot(26), d.label, d.choices, get, set)
 		end
 	end
+	self:_ctlBind(slot(26), row)
 	return total
+end
+
+-- keybind: click, then press a key (Backspace / Delete clears, Escape cancels)
+function UI:_ctlBind(order, row)
+	local s = self.state
+	local f = make("Frame", { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1 }, self.popScroll)
+	label(f, "Keybind", 26, 112).Size = UDim2.new(1, -112, 1, 0)
+	local btn = make("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(106, 22),
+		BackgroundColor3 = C.panel2,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = C.accent,
+		Text = row.bind or "none",
+	}, f)
+	corner(btn, 7)
+	self:_surface(btn)
+	btn.MouseButton1Click:Connect(function()
+		s.binding = { row = row, btn = btn }
+		btn.Text = "press a key..."
+	end)
+end
+
+-- runs a row as if it was clicked (toggle, or run for button rows)
+function UI:_activate(row, quiet)
+	if row.button then
+		self.A.highlightRow(row, true)
+		task.delay(0.25, function()
+			self.A.highlightRow(row, false)
+		end)
+		self.onChanged(row.id, true, row.value, row.optv)
+	else
+		row.on = not row.on
+		self.A.setSwitch(row, true, C)
+		self.onChanged(row.id, row.on, row.value, row.optv)
+		self:refreshStatus()
+	end
+	if not quiet then
+		self:_startCountdown()
+	end
 end
 
 -- fills the popover and sizes it (capped to the screen, the controls scroll when they do not fit)
@@ -967,9 +1019,6 @@ end
 
 function UI:_openPop(row, pos)
 	local s = self.state
-	if row.slider == "Unused" and #row.optDefs == 0 then
-		return -- nothing to configure
-	end
 	if s.activeRow and s.activeRow ~= row then
 		self.A.highlightRow(s.activeRow, false)
 	end
@@ -993,7 +1042,7 @@ function UI:_closePop(silent)
 		return
 	end
 	s.popOpen = false
-	s.drag, s.hover = nil, nil
+	s.drag, s.hover, s.binding = nil, nil, nil
 	self.scrim.Visible = false
 	if s.activeRow then
 		self.A.highlightRow(s.activeRow, false)
@@ -1023,7 +1072,7 @@ end
 
 -- puts a row back to its default (on / off, slider, every option) and tells the features
 function UI:_resetRow(row, animate)
-	row.on, row.value = row.defOn, row.defValue
+	row.on, row.value, row.bind = row.defOn, row.defValue, nil
 	for _, d in ipairs(row.optDefs) do
 		row.optv[d.key] = d.default -- in place: features keep a reference to this table
 	end
@@ -1184,16 +1233,27 @@ end
 -- called by Functionality (scale / auto-hide features)
 -- alpha 1 = solid menu, lower = see-through (the menu surfaces only, text and switches stay solid)
 function UI:setOpacity(alpha)
-	local t = 1 - math.clamp(alpha, 0.2, 1)
-	self.surfaceT = t
-	self.root.BackgroundTransparency = t
-	for _, row in ipairs(self.rowList) do
-		row.btn.BackgroundTransparency = t
+	alpha = math.clamp(alpha, 0.2, 1)
+	self.alpha = alpha
+	self.surfaceT = 1 - alpha
+	-- every registered surface: root, tab bar, rows, badges, countdown bar, choice buttons...
+	for inst, base in pairs(self.surfaces) do
+		inst.BackgroundTransparency = 1 - (1 - base) * alpha
 	end
 	local active = self.tabButtons[self.state.tab]
 	if active then
-		active.BackgroundTransparency = t
+		active.BackgroundTransparency = self.surfaceT
 	end
+	-- the settings popover floats over the game, so it never gets more see-through than 60%
+	self.pop.BackgroundTransparency = 1 - math.max(alpha, 0.6)
+end
+
+-- a gui object whose background follows the menu opacity. base = its transparency when the menu is solid.
+function UI:_surface(inst, base)
+	base = base or 0
+	self.surfaces[inst] = base
+	inst.BackgroundTransparency = 1 - (1 - base) * self.alpha
+	return inst
 end
 
 function UI:setScale(scale)
@@ -1265,8 +1325,43 @@ function UI:_bindInput()
 	end))
 
 	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
-		if input.KeyCode == CFG.ToggleKey and not processed then
+		-- capturing a keybind from the popover
+		if s.binding then
+			if input.UserInputType == Enum.UserInputType.Keyboard then
+				local b = s.binding
+				s.binding = nil
+				local code = input.KeyCode
+				if code ~= Enum.KeyCode.Escape then
+					if code == Enum.KeyCode.Backspace or code == Enum.KeyCode.Delete then
+						b.row.bind = nil
+					elseif code ~= CFG.ToggleKey then
+						for _, r in ipairs(self.rowList) do
+							if r ~= b.row and r.bind == code.Name then
+								r.bind = nil -- one key, one row
+							end
+						end
+						b.row.bind = code.Name
+					end
+					self.onChanged(b.row.id, b.row.on, b.row.value, b.row.optv) -- triggers the autosave
+				end
+				b.btn.Text = b.row.bind or "none"
+			end
+			return
+		end
+		if processed then
+			return
+		end
+		if input.KeyCode == CFG.ToggleKey then
 			self:toggle()
+		elseif input.UserInputType == Enum.UserInputType.Keyboard then
+			for _, row in ipairs(self.rowList) do
+				if row.bind == input.KeyCode.Name then
+					self:_activate(row, true)
+					if self.onBound then
+						self.onBound(row)
+					end
+				end
+			end
 		end
 	end))
 end
