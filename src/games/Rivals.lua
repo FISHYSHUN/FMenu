@@ -129,14 +129,17 @@ end
 local Rivals = {
 	name = "Rivals",
 	tab = { name = "Rivals", rows = {
+		{ header = "Aiming" },
 		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%") },
 		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end },
 		{ id = "rvFov", label = "FOV ring", slider = "Radius", value = 40, on = false, fmt = range(40, 400, "px") },
 		{ id = "rvPart", label = "Aim part", slider = "Head / Chest / Closest", value = 0, on = true, fmt = function(v) return v < 34 and "Head" or (v < 67 and "Chest" or "Closest") end },
 		{ id = "rvPred", label = "Prediction", slider = "Lead amount", value = 30, on = false, fmt = range(0, 100, "%") },
+		{ header = "Shooting & ESP" },
 		{ id = "rvTrigger", label = "Triggerbot", slider = "Reaction delay", value = 15, on = false, fmt = range(0, 300, "ms") },
 		{ id = "rvEsp", label = "Enemy ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st") },
 		{ id = "rvInfo", label = "Target info", slider = "Unused", value = 0, on = false },
+		{ header = "Filters" },
 		{ id = "rvVis", label = "Visible only", slider = "Unused", value = 0, on = true },
 		{ id = "rvTeam", label = "Team check", slider = "Unused", value = 0, on = true },
 	} },
@@ -363,9 +366,7 @@ do
 					if not isEnemy(plr) then
 						return nil
 					end
-					local hum = Util.humanoid(char)
-					return Color3.fromRGB(255, 70, 70),
-						("%s  %dm  %dhp"):format(plr.DisplayName, math.floor(dist), math.floor(hum and hum.Health or 0))
+					return Color3.fromRGB(255, 70, 70), ESP.text(plr, char, dist)
 				end,
 			})
 		end,
