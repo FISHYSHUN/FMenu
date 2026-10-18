@@ -21,6 +21,26 @@ function Util.lerp(lo, hi, v)
 	return lo + (hi - lo) * v / 100
 end
 
+-- Cheat level. Every cheat that has a "Mode" option scales itself by one of these profiles.
+--   power   how much of the slider's boost above normal is applied (speed, jump, fly, vehicle, clicks)
+--   aim     aim assist pull strength multiplier        fov     aim FOV radius multiplier
+--   smooth  minimum aim-lock smoothing (0-100)         delay / jitter  minimum trigger reaction and random extra (ms)
+local PROFILES = {
+	Blatant = { power = 1, aim = 1, fov = 1, smooth = 0, delay = 0, jitter = 0 },
+	Semi = { power = 0.55, aim = 0.6, fov = 0.7, smooth = 35, delay = 80, jitter = 60 },
+	Legit = { power = 0.25, aim = 0.35, fov = 0.5, smooth = 70, delay = 150, jitter = 120 },
+}
+Util.LEVELS = { "Blatant", "Semi", "Legit" }
+
+function Util.level(name)
+	return PROFILES[name] or PROFILES.Blatant
+end
+
+-- the "Mode" control for a row's right-click menu
+function Util.modeOption()
+	return { type = "choice", key = "mode", label = "Mode", choices = Util.LEVELS, default = "Blatant" }
+end
+
 -- row formatter: shows the real value instead of 0-100, e.g. fmt = Util.range(16, 150, " sp")
 function Util.range(lo, hi, unit)
 	return function(v)
