@@ -60,7 +60,7 @@ function ESP.newStyle(overrides)
 	return s
 end
 
-function ESP.configure(style, opts)
+function ESP.applyStyle(style, opts)
 	for k, v in pairs(opts) do
 		style[k] = v
 	end
@@ -401,7 +401,7 @@ end
 
 -- takes the option table of a row (keys = style keys) and applies it
 function ESP:configure(opts)
-	ESP.configure(self.style, opts)
+	ESP.applyStyle(self.style, opts)
 end
 
 function ESP:setEnabled(on)
