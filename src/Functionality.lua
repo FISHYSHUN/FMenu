@@ -14,10 +14,7 @@ local import = ...
 local Util = import("Util")
 local ESP = import("ESP")
 local Defense = import("Defense")
-<<<<<<< Updated upstream
-=======
 local Troll = import("Troll")
->>>>>>> Stashed changes
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -39,11 +36,7 @@ local toasts = nil
 local conn = nil
 local hudConns = {}
 local positions = {} -- hud key -> Vector2 (where the user dragged it), survives toggling
-<<<<<<< Updated upstream
-local dragging = nil -- { info, key, input, grab }
-=======
 local dragging = nil -- { info, key, input, start, from }
->>>>>>> Stashed changes
 local hudLocked, notifyOn = false, true
 local huds = {} -- every draggable label, so they can be pulled back on screen after a resize
 
@@ -117,9 +110,6 @@ function Functionality.draggable(obj, key, side, row)
 	obj:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
 	obj.InputBegan:Connect(function(input)
 		if isPress(input) and not hudLocked then
-<<<<<<< Updated upstream
-			dragging = { info = info, key = key, input = input, grab = Util.pointer(input) - obj.AbsolutePosition }
-=======
 			-- Delta based: remember where the pointer and the label were when the press started and move the label
 			-- by how far the pointer has travelled since. Mixing AbsolutePosition (screen space) with Position
 			-- (relative to the HUD gui) is what used to make labels jump away from the cursor.
@@ -130,7 +120,6 @@ function Functionality.draggable(obj, key, side, row)
 				start = Util.pointer(input),
 				from = Vector2.new(obj.Position.X.Offset, obj.Position.Y.Offset),
 			}
->>>>>>> Stashed changes
 		end
 	end)
 	info.place = place
@@ -575,19 +564,11 @@ do
 		init = function()
 			esp = ESP.new({
 				maxDistance = 1000,
-<<<<<<< Updated upstream
-				resolve = function(plr, char, dist)
-					if Util.flags.hideTeam and Util.isTeammate(plr) then
-						return nil
-					end
-					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90)), ESP.text(plr, char, dist)
-=======
 				resolve = function(plr, char, dist, style)
 					if style.hideTeam and Util.isTeammate(plr) then
 						return nil
 					end
 					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90), style), ESP.text(plr, char, dist, nil, style)
->>>>>>> Stashed changes
 				end,
 			})
 		end,
@@ -639,19 +620,11 @@ do
 			end
 			local cam = workspace.CurrentCamera
 			local vp = cam.ViewportSize
-<<<<<<< Updated upstream
-			local from = ESP.style.tracerFrom
-			local origin = Vector2.new(vp.X / 2, from == "top" and 0 or (from == "center" and vp.Y / 2 or vp.Y))
-			local used = 0
-			for _, plr in ipairs(Players:GetPlayers()) do
-				if plr ~= lp and Util.isAlive(plr.Character) and not (Util.flags.hideTeam and Util.isTeammate(plr)) then
-=======
 			local from = style.tracerFrom
 			local origin = Vector2.new(vp.X / 2, from == "Top" and 0 or (from == "Center" and vp.Y / 2 or vp.Y))
 			local used = 0
 			for _, plr in ipairs(Players:GetPlayers()) do
 				if plr ~= lp and Util.isAlive(plr.Character) and not (style.hideTeam and Util.isTeammate(plr)) then
->>>>>>> Stashed changes
 					local root = Util.rootOf(plr.Character)
 					if root then
 						local p, onScreen = cam:WorldToViewportPoint(root.Position)
@@ -664,12 +637,8 @@ do
 							line.Size = UDim2.fromOffset(delta.Magnitude, thickness)
 							line.Position = UDim2.fromOffset(mid.X, mid.Y)
 							line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
-<<<<<<< Updated upstream
-							line.BackgroundColor3 = ESP.color(plr, plr.Character, Color3.fromRGB(255, 90, 90))
-=======
 							line.BackgroundColor3 = ESP.color(plr, plr.Character, Color3.fromRGB(255, 90, 90), style)
 							line.BackgroundTransparency = 1 - style.alpha
->>>>>>> Stashed changes
 							line.Visible = true
 						end
 					end
@@ -861,16 +830,10 @@ do
 		init = function()
 			label = statLabel("Coords", 3)
 		end,
-<<<<<<< Updated upstream
-		set = function(on)
-			enabled = on
-			label.Visible = on
-=======
 		set = function(on, _v, _c, o)
 			enabled = on
 			label.Visible = on
 			styleHud(label, o)
->>>>>>> Stashed changes
 		end,
 		step = function(dt)
 			if not enabled then
@@ -896,16 +859,10 @@ do
 		init = function()
 			label = statLabel("Speed", 4)
 		end,
-<<<<<<< Updated upstream
-		set = function(on)
-			enabled = on
-			label.Visible = on
-=======
 		set = function(on, _v, _c, o)
 			enabled = on
 			label.Visible = on
 			styleHud(label, o)
->>>>>>> Stashed changes
 		end,
 		step = function(dt)
 			if not enabled then
@@ -998,11 +955,7 @@ do
 	}
 end
 
-<<<<<<< Updated upstream
--- box ESP: boxes that scale with distance, honours "hide teammates"
-=======
 -- box ESP: boxes that scale with distance. Look comes from the row's right-click options.
->>>>>>> Stashed changes
 do
 	local esp
 	features.boxes = {
@@ -1010,17 +963,6 @@ do
 			esp = ESP.new({
 				make = ESP.box,
 				maxDistance = 1000,
-<<<<<<< Updated upstream
-				resolve = function(plr, char, dist)
-					if Util.flags.hideTeam and Util.isTeammate(plr) then
-						return nil
-					end
-					return ESP.color(plr, char, Color3.fromRGB(255, 90, 90)), ESP.text(plr, char, dist)
-				end,
-			})
-		end,
-		set = function(on, v)
-=======
 				resolve = function(plr, char, dist, style)
 					if style.hideTeam and Util.isTeammate(plr) then
 						return nil
@@ -1031,7 +973,6 @@ do
 		end,
 		set = function(on, v, _c, o)
 			esp:configure(o)
->>>>>>> Stashed changes
 			esp:setDistance(lerp(100, 2000, v))
 			esp:setEnabled(on)
 		end,
@@ -1046,45 +987,6 @@ do
 	}
 end
 
-<<<<<<< Updated upstream
--- ESP style rows: they only write into ESP.style, every ESP re-reads it on its next update
-do
-	local style = ESP.style
-	features.chams = { set = function(on, v) style.highlight = on; style.fill = v / 100 end }
-	features.outline = { set = function(on, v) style.outline = on and v / 100 or 1 end }
-	features.espNames = {
-		set = function(on, v)
-			style.showName = on
-			style.textSize = math.floor(lerp(10, 20, v) + 0.5)
-		end,
-	}
-	features.espDist = { set = function(on) style.showDist = on end }
-	features.espHealth = { set = function(on) style.showHealth = on end }
-	features.espTool = { set = function(on) style.showTool = on end }
-	features.healthbar = { set = function(on) style.healthBar = on end }
-	features.boxfill = { set = function(on, v) style.boxFill = on and v / 100 or 0 end }
-	features.boxthick = { set = function(on, v) style.boxThick = on and lerp(1, 4, v) or 1.5 end }
-	features.hpcolor = { set = function(on) style.hpColor = on end }
-	features.rainbow = { set = function(on, v) style.rainbow = on; style.rainbowSpeed = lerp(0.05, 1, v) end }
-	features.customcolor = { set = function(on, v) style.custom = on; style.hue = v / 100 end }
-	features.wallcheck = { set = function(on) style.wallCheck = on end }
-	features.tracerFrom = {
-		set = function(on, v)
-			style.tracerFrom = (not on or v < 34) and "bottom" or (v < 67 and "center" or "top")
-		end,
-	}
-	features.espRate = { set = function(on, v) style.rate = on and lerp(4, 30, v) or 10 end }
-end
-
--- hide teammates: player ESP, boxes and tracers skip your team
-features.hideteam = {
-	set = function(on)
-		Util.flags.hideTeam = on
-	end,
-}
-
-=======
->>>>>>> Stashed changes
 -- hold C to zoom the camera (value = zoom FOV)
 do
 	local enabled, zoomFov, base = false, 30, nil
@@ -1135,14 +1037,6 @@ do
 	}
 end
 
-<<<<<<< Updated upstream
--- auto clicker: hold left mouse and it clicks at the slider rate
-do
-	local enabled, interval, last = false, 0.1, 0
-	features.autoclick = {
-		set = function(on, v)
-			enabled = on
-=======
 -- auto clicker: clicks at the slider rate. Option "only while holding" (default) = hold left mouse, off = always
 do
 	local enabled, interval, last, cfg = false, 0.1, 0, {}
@@ -1150,21 +1044,12 @@ do
 		set = function(on, v, _c, o)
 			enabled = on
 			cfg = o
->>>>>>> Stashed changes
 			interval = 1 / lerp(4, 30, v)
 		end,
 		step = function()
 			if not enabled or not mouse1click or UserInputService:GetFocusedTextBox() then
 				return
 			end
-<<<<<<< Updated upstream
-			if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-				local now = os.clock()
-				if now - last >= interval then
-					last = now
-					mouse1click()
-				end
-=======
 			if cfg.hold ~= false and not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
 				return
 			end
@@ -1172,7 +1057,6 @@ do
 			if now - last >= interval then
 				last = now
 				mouse1click()
->>>>>>> Stashed changes
 			end
 		end,
 	}
@@ -1435,12 +1319,9 @@ for id, def in pairs(Defense.features) do
 	features[id] = def
 end
 
-<<<<<<< Updated upstream
-=======
 -- trolling (src/Troll.lua)
 for id, def in pairs(Troll.features) do
 	features[id] = def
 end
 
->>>>>>> Stashed changes
 return Functionality

@@ -29,11 +29,7 @@ local AIM_BIND = "FMenuAim"
 local CHEST = { "UpperTorso", "Torso", "HumanoidRootPart" }
 
 local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0 }
-<<<<<<< Updated upstream
-local aim = { assist = false, lock = false, strength = 0.4, smooth = 0, bound = false, target = nil }
-=======
 local aim = { assist = false, lock = false, strength = 0.4, smooth = 0, bound = false, target = nil, dead = 0.4, falloff = 0.6 }
->>>>>>> Stashed changes
 
 local function isEnemy(plr)
 	if plr == lp then
@@ -134,16 +130,6 @@ local Rivals = {
 	name = "Rivals",
 	tab = { name = "Rivals", rows = {
 		{ header = "Aiming" },
-<<<<<<< Updated upstream
-		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%") },
-		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end },
-		{ id = "rvFov", label = "FOV ring", slider = "Radius", value = 40, on = false, fmt = range(40, 400, "px") },
-		{ id = "rvPart", label = "Aim part", slider = "Head / Chest / Closest", value = 0, on = true, fmt = function(v) return v < 34 and "Head" or (v < 67 and "Chest" or "Closest") end },
-		{ id = "rvPred", label = "Prediction", slider = "Lead amount", value = 30, on = false, fmt = range(0, 100, "%") },
-		{ header = "Shooting & ESP" },
-		{ id = "rvTrigger", label = "Triggerbot", slider = "Reaction delay", value = 15, on = false, fmt = range(0, 300, "ms") },
-		{ id = "rvEsp", label = "Enemy ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st") },
-=======
 		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%"), opts = {
 			{ type = "slider", key = "dead", label = "Dead zone", min = 0.1, max = 3, step = 0.1, unit = " deg", default = 0.4 },
 			{ type = "slider", key = "falloff", label = "Edge falloff", min = 0, max = 1, step = 0.05, pct = true, default = 0.6 },
@@ -162,7 +148,6 @@ local Rivals = {
 			{ type = "slider", key = "interval", label = "Time between clicks", min = 0.05, max = 0.5, step = 0.01, unit = "s", default = 0.12 },
 		} },
 		{ id = "rvEsp", label = "Enemy ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st"), opts = ESP.options("player") },
->>>>>>> Stashed changes
 		{ id = "rvInfo", label = "Target info", slider = "Unused", value = 0, on = false },
 		{ header = "Filters" },
 		{ id = "rvVis", label = "Visible only", slider = "Unused", value = 0, on = true },
@@ -237,17 +222,10 @@ do
 			cam.CFrame = cam.CFrame:Lerp(desired, alpha)
 		else
 			local angle = math.acos(math.clamp(cam.CFrame.LookVector:Dot(dir.Unit), -1, 1))
-<<<<<<< Updated upstream
-			if angle < math.rad(0.4) then
-				return -- already on it, leave your aim alone
-			end
-			local falloff = 1 - 0.6 * math.min(1, d / shared.fov) -- weaker toward the edge of the ring
-=======
 			if angle < math.rad(aim.dead) then
 				return -- already on it, leave your aim alone
 			end
 			local falloff = 1 - aim.falloff * math.min(1, d / shared.fov) -- weaker toward the edge of the ring
->>>>>>> Stashed changes
 			local rate = Util.lerp(1.5, 12, aim.strength * 100) * falloff
 			local step = math.min(angle * (1 - math.exp(-dt * rate)), math.rad(Util.lerp(60, 300, aim.strength * 100)) * dt)
 			cam.CFrame = cam.CFrame:Lerp(desired, step / angle)
@@ -269,17 +247,11 @@ do
 	end
 
 	features.rvAim = {
-<<<<<<< Updated upstream
-		set = function(on, v)
-			aim.assist = on
-			aim.strength = v / 100
-=======
 		set = function(on, v, _c, o)
 			aim.assist = on
 			aim.strength = v / 100
 			aim.dead = o.dead or 0.4
 			aim.falloff = o.falloff or 0.6
->>>>>>> Stashed changes
 			refresh()
 		end,
 		destroy = function()
@@ -410,14 +382,10 @@ do
 					if not isEnemy(plr) then
 						return nil
 					end
-<<<<<<< Updated upstream
-					return Color3.fromRGB(255, 70, 70), ESP.text(plr, char, dist)
-=======
 					if style.hideTeam and Util.isTeammate(plr) then
 						return nil
 					end
 					return ESP.color(plr, char, Color3.fromRGB(255, 70, 70), style, true), ESP.text(plr, char, dist, nil, style)
->>>>>>> Stashed changes
 				end,
 			})
 		end,

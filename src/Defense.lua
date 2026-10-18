@@ -28,12 +28,8 @@ local features = Defense.features
 ---------------------------------------------------------------------
 -- flags: who looked like a cheater, and why (expire after FLAG_SECONDS without a new strike)
 ---------------------------------------------------------------------
-<<<<<<< Updated upstream
-local FLAG_SECONDS = 30
-=======
 local FLAG_SECONDS = 30 -- changed by the Flag markers row ("Keep flag for")
 local alertGap = 15 -- seconds between two alerts about the same player and reason (Speed / fly / tp row option)
->>>>>>> Stashed changes
 local flagged = {} -- plr -> { reasons = { [reason] = expiresAt } }
 local lastAlert = {} -- plr -> { [reason] = time }
 
@@ -50,11 +46,7 @@ local function flag(plr, reason, ctx)
 		la = {}
 		lastAlert[plr] = la
 	end
-<<<<<<< Updated upstream
-	if not la[reason] or now - la[reason] > 15 then
-=======
 	if not la[reason] or now - la[reason] > alertGap then
->>>>>>> Stashed changes
 		la[reason] = now
 		ctx.notify(("%s: %s"):format(plr.DisplayName, reason), ORANGE)
 	end
@@ -218,11 +210,7 @@ features.stabilize = {
 ---------------------------------------------------------------------
 -- detection
 ---------------------------------------------------------------------
-<<<<<<< Updated upstream
-local det = { move = false, spin = false, aim = false, moveSens = 50, spinSens = 50, aimSens = 50 }
-=======
 local det = { move = false, spin = false, aim = false, moveSens = 50, spinSens = 50, aimSens = 50, o = {} }
->>>>>>> Stashed changes
 local samples = {} -- plr -> per player running numbers
 local acc = 0
 
@@ -257,20 +245,12 @@ local function scanMotion(plr, s, now, ctx)
 				else
 					s.fast = 0
 				end
-<<<<<<< Updated upstream
-				if s.fast >= 3 then
-=======
 				if s.fast >= 3 and det.o.speed ~= false then
->>>>>>> Stashed changes
 					flag(plr, "speed", ctx)
 				end
 
 				-- teleport: a big jump in one tick; needs a second one within 20 s so round starts do not count
-<<<<<<< Updated upstream
-				if delta.Magnitude > lerp(150, 60, sens * 100) and dt < 0.3 then
-=======
 				if delta.Magnitude > lerp(150, 60, sens * 100) and dt < 0.3 and det.o.tp ~= false then
->>>>>>> Stashed changes
 					if s.lastTp and now - s.lastTp < 20 then
 						flag(plr, "teleport", ctx)
 					end
@@ -285,11 +265,7 @@ local function scanMotion(plr, s, now, ctx)
 					and state ~= Enum.HumanoidStateType.Climbing
 					and state ~= Enum.HumanoidStateType.Swimming
 				s.air = floating and ((s.air or 0) + dt) or 0
-<<<<<<< Updated upstream
-				if s.air > lerp(5, 2.5, sens * 100) then
-=======
 				if s.air > lerp(5, 2.5, sens * 100) and det.o.fly ~= false then
->>>>>>> Stashed changes
 					flag(plr, "fly", ctx)
 				end
 			end
@@ -363,17 +339,11 @@ features.detAim = {
 }
 -- detMove owns the scan loop for all three (a feature's step runs every frame whether it is on or not)
 features.detMove = {
-<<<<<<< Updated upstream
-	set = function(on, v)
-		det.move = on
-		det.moveSens = v
-=======
 	set = function(on, v, _c, o)
 		det.move = on
 		det.moveSens = v
 		det.o = o
 		alertGap = o.cooldown or 15
->>>>>>> Stashed changes
 	end,
 	step = function(dt, ctx)
 		if not (det.move or det.spin or det.aim) then
@@ -426,13 +396,9 @@ do
 				end,
 			})
 		end,
-<<<<<<< Updated upstream
-		set = function(on)
-=======
 		set = function(on, _v, _c, o)
 			FLAG_SECONDS = o.duration or 30
 			esp:configure(o)
->>>>>>> Stashed changes
 			esp:setEnabled(on)
 		end,
 		step = function(dt)
