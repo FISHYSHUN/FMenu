@@ -23,12 +23,37 @@ end
 local BASE = genv.FMENU_BASE or "https://raw.githubusercontent.com/FISHYSHUN/FMenu/main/src/"
 local cache = {}
 
+-- Private repo support: a read-only GitHub token in getgenv().FMENU_TOKEN or the file FMenu/token.txt makes every
+-- fetch go through request() with an Authorization header. No token = plain game:HttpGet (public repo).
+local function readToken()
+	local t = genv.FMENU_TOKEN
+	if (not t or t == "") and type(isfile) == "function" and type(readfile) == "function" and isfile("FMenu/token.txt") then
+		local ok, text = pcall(readfile, "FMenu/token.txt")
+		t = ok and text or nil
+	end
+	t = type(t) == "string" and t:match("^%s*(.-)%s*$") or ""
+	return t ~= "" and t or nil
+end
+
+local function fetch(url)
+	local token = readToken()
+	local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
+	if token and req then
+		local res = req({ Url = url, Method = "GET", Headers = { Authorization = "token " .. token } })
+		if res and res.StatusCode == 200 then
+			return res.Body
+		end
+		error(("http %s (wrong token, or the token cannot read this repo)"):format(tostring(res and res.StatusCode)), 0)
+	end
+	return game:HttpGet(url)
+end
+
 local function import(name)
 	if cache[name] ~= nil then
 		return cache[name]
 	end
 	local ok, src = pcall(function()
-		return game:HttpGet(BASE .. name .. ".lua")
+		return fetch(BASE .. name .. ".lua")
 	end)
 	if not ok then
 		error(("[FMenu] could not fetch %s (%s)"):format(name, tostring(src)), 0)
@@ -64,7 +89,11 @@ if queueTp and not genv.FMENU_NO_REQUEUE then
 	if genv.FMENU_BASE then
 		lines[#lines + 1] = ("g.FMENU_BASE = %q"):format(genv.FMENU_BASE)
 	end
-	lines[#lines + 1] = ("loadstring(game:HttpGet(%q))()"):format(loaderUrl)
+	-- the queued copy reads the token from the file again (it never contains the token itself)
+	lines[#lines + 1] = ("local url = %q"):format(loaderUrl)
+	lines[#lines + 1] = 'local t = type(isfile) == "function" and isfile("FMenu/token.txt") and readfile("FMenu/token.txt"):match("^%s*(.-)%s*$")'
+	lines[#lines + 1] = "local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)"
+	lines[#lines + 1] = 'loadstring((t and t ~= "" and req) and req({ Url = url, Headers = { Authorization = "token " .. t } }).Body or game:HttpGet(url))()'
 	pcall(queueTp, table.concat(lines, "\n"))
 end
 
@@ -130,7 +159,7 @@ cfg.ready = true -- from here on changes are autosaved
 -- optional extras: if one fails to load or start the menu still works.
 --   QuickMenu    hold Tab for the current game's cheats (src/QuickMenu.lua)
 --   PlayerPanel  /isee in chat opens a player list with TP / Watch / Orbit / Mark (src/PlayerPanel.lua)
---   ServerShare  /share in chat posts this server to your Discord webhook (src/ServerShare.lua)
+--   ServerShare  posts the server you joined to your Discord webhook, once per server (src/ServerShare.lua)
 local extras = {}
 local function loadExtra(name, args)
 	local okMod, Mod = pcall(import, name)
