@@ -54,6 +54,8 @@ local CFG, C = UI.CONFIG, UI.THEME
 local LEAD_W = 70
 local LEAD_EXP = UDim2.new(0, 14, 0, 0)
 local LEAD_MIN = UDim2.new(0.5, -LEAD_W / 2, 0, 0)
+local NP_PILL = Vector2.new(332, 54) -- pill size while a song is playing (Last.fm)
+local NP_LEAD = UDim2.new(1, -(LEAD_W + 14), 0, 6) -- the status dot + "FMenu" move to the right end then
 -- vertical layout of the expanded menu: header + tab bar + PANEL_Y.. rows ..GAP, hint line, PAD
 local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 572
 local CELL_H, GAP = 38, 8 -- one row, space between rows
@@ -149,6 +151,10 @@ local function sane(d, v)
 			if c == v then
 				return v
 			end
+		end
+	elseif t == "text" then
+		if type(v) == "string" then
+			return v:sub(1, 200)
 		end
 	elseif type(v) == "number" then
 		return math.clamp(v, d.min or 0, d.max or (t == "hue" and 1 or 100))
@@ -401,6 +407,70 @@ function UI:_buildShell()
 		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
 		PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 10),
 	}, self.popScroll)
+
+	-- now playing: shown on the pill (menu minimized) while a song is playing, see UI:setNowPlaying
+	local np = make("CanvasGroup", {
+		Name = "NowPlaying",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		GroupTransparency = 1,
+		Visible = false,
+		ZIndex = 1,
+	}, root)
+	self.np = np
+	self.npCover = make("ImageLabel", {
+		Position = UDim2.fromOffset(10, 9),
+		Size = UDim2.fromOffset(36, 36),
+		BackgroundColor3 = C.panel2,
+		BorderSizePixel = 0,
+		ScaleType = Enum.ScaleType.Crop,
+		Image = "",
+	}, np)
+	corner(self.npCover, 18)
+	make("UIStroke", { Color = C.line, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, self.npCover)
+	self.npLetter = make("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 16,
+		TextColor3 = C.accent,
+		Text = "",
+	}, self.npCover)
+	local function npText(y, h, size, font, color, text)
+		return make("TextLabel", {
+			Position = UDim2.fromOffset(54, y),
+			Size = UDim2.fromOffset(160, h),
+			BackgroundTransparency = 1,
+			Font = font,
+			TextSize = size,
+			TextColor3 = color,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = text,
+		}, np)
+	end
+	self.npArtist = npText(6, 12, 10, Enum.Font.Gotham, C.muted, "")
+	self.npTitle = npText(18, 16, 12, Enum.Font.GothamBold, C.text, "")
+	self.npBarBack = make("Frame", {
+		Position = UDim2.fromOffset(54, 38),
+		Size = UDim2.fromOffset(88, 4),
+		BackgroundColor3 = C.line,
+		BorderSizePixel = 0,
+	}, np)
+	corner(self.npBarBack, 2)
+	self.npBar = make("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent, BorderSizePixel = 0 }, self.npBarBack)
+	corner(self.npBar, 2)
+	self.npTime = make("TextLabel", {
+		Position = UDim2.fromOffset(148, 33),
+		Size = UDim2.fromOffset(72, 14),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "0:00",
+	}, np)
+	self.npActive = false
 
 	-- handed to Animations for minimize/expand
 	self.refs = {
@@ -953,10 +1023,42 @@ function UI:_fillPop(row)
 			self:_ctlToggle(slot(26), d.label, get, set)
 		elseif d.type == "choice" then
 			self:_ctlChoice(slot(26), d.label, d.choices, get, set)
+		elseif d.type == "text" then
+			self:_ctlText(slot(48), d.label, d.placeholder, get, set)
 		end
 	end
 	self:_ctlBind(slot(26), row)
 	return total
+end
+
+-- text field (e.g. a username). The value is stored when the box loses focus / Enter is pressed.
+function UI:_ctlText(order, text, placeholder, get, set)
+	local f = make("Frame", { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1 }, self.popScroll)
+	label(f, text, 16)
+	local box = make("TextBox", {
+		Position = UDim2.fromOffset(0, 20),
+		Size = UDim2.new(1, 0, 0, 24),
+		BackgroundColor3 = C.panel2,
+		BorderSizePixel = 0,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = C.text,
+		PlaceholderText = placeholder or "",
+		PlaceholderColor3 = C.muted,
+		ClearTextOnFocus = false,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = tostring(get() or ""),
+	}, f)
+	corner(box, 7)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, box)
+	self:_surface(box)
+	box.FocusLost:Connect(function()
+		local v = box.Text:match("^%s*(.-)%s*$")
+		box.Text = v
+		if v ~= get() then
+			set(v)
+		end
+	end)
 end
 
 -- keybind: click, then press a key (Backspace / Delete clears, Escape cancels)
@@ -1201,7 +1303,10 @@ function UI:minimize()
 	self.barFill.Size = UDim2.fromScale(1, 1)
 	self:_applyStatus(false)
 
-	local t = self.A.collapse(self.refs, CFG.Pill, LEAD_MIN)
+	local size, leadPos = self:_pillSpec()
+	local t = self.A.collapse(self.refs, size, leadPos)
+	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 3 or 35) })
+	self:_npShow(self.npActive)
 	t.Completed:Once(function()
 		if s.token == token and s.minimized then
 			self.body.Visible = false
@@ -1219,6 +1324,8 @@ function UI:expand()
 	self.body.Visible = true
 	self:_applyStatus(true)
 	self.A.expand(self.refs, self.expanded, LEAD_EXP)
+	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, 35) })
+	self:_npShow(false)
 	self:_startCountdown()
 end
 
@@ -1246,6 +1353,85 @@ function UI:setOpacity(alpha)
 	end
 	-- the settings popover floats over the game, so it never gets more see-through than 60%
 	self.pop.BackgroundTransparency = 1 - math.max(alpha, 0.6)
+end
+
+---------------------------------------------------------------------
+-- now playing on the pill (fed by the Last.fm feature)
+---------------------------------------------------------------------
+local function fmtTime(sec)
+	sec = math.max(0, math.floor(sec))
+	return ("%d:%02d"):format(sec // 60, sec % 60)
+end
+
+-- pill size + where the status dot / title sit while minimized
+function UI:_pillSpec()
+	if self.npActive then
+		return NP_PILL, NP_LEAD
+	end
+	return CFG.Pill, LEAD_MIN
+end
+
+function UI:_npShow(show)
+	if show then
+		self.np.Visible = true
+	end
+	local t = self.A.tween(self.np, "ease", { GroupTransparency = show and 0 or 1 })
+	if not show then
+		t.Completed:Once(function()
+			if self.np.GroupTransparency >= 0.99 then
+				self.np.Visible = false
+			end
+		end)
+	end
+end
+
+-- minimized: grow / shrink the pill to match whether a song is showing
+function UI:_refreshPill()
+	if not self.built or not self.state.minimized then
+		return
+	end
+	local size, leadPos = self:_pillSpec()
+	self.A.tween(self.root, "ease", { Size = UDim2.fromOffset(size.X, size.Y) })
+	self.A.tween(self.lead, "ease", { Position = leadPos })
+	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 3 or 35) })
+	self:_npShow(self.npActive)
+end
+
+-- info = { title, artist, showProgress? } or nil (nothing playing). The cover arrives later through setCover.
+function UI:setNowPlaying(info)
+	self.npActive = info ~= nil
+	if info then
+		local title = info.title or ""
+		self.npTitle.Text = title
+		self.npArtist.Text = info.artist or ""
+		self.npLetter.Text = (title:match(utf8.charpattern) or "?"):upper()
+		self.npLetter.Visible = true
+		self.npCover.Image = ""
+		local bars = info.showProgress ~= false
+		self.npBarBack.Visible, self.npTime.Visible = bars, bars
+		self.npBar.Size = UDim2.fromScale(0, 1)
+		self.npTime.Text = "0:00"
+	end
+	self:_refreshPill()
+end
+
+function UI:setCover(asset)
+	self.npCover.Image = asset or ""
+	self.npLetter.Visible = asset == nil
+end
+
+-- elapsed / duration in seconds (duration nil = unknown, only the time is shown)
+function UI:setProgress(elapsed, duration)
+	if not self.npActive then
+		return
+	end
+	if duration and duration > 0 then
+		self.npBar.Size = UDim2.fromScale(math.clamp(elapsed / duration, 0, 1), 1)
+		self.npTime.Text = fmtTime(math.min(elapsed, duration)) .. " / " .. fmtTime(duration)
+	else
+		self.npBar.Size = UDim2.fromScale(0, 1)
+		self.npTime.Text = fmtTime(elapsed)
+	end
 end
 
 -- a gui object whose background follows the menu opacity. base = its transparency when the menu is solid.
