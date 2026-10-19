@@ -127,21 +127,25 @@ end
 ui:start()
 cfg.ready = true -- from here on changes are autosaved
 
--- hold-key quick menu for the current game (src/QuickMenu.lua). Optional: if it fails to load the menu still works.
-local quick
-do
-	local okMod, QuickMenu = pcall(import, "QuickMenu")
-	if okMod then
-		local okNew, obj = pcall(QuickMenu.new, { ui = ui, animations = Animations, profile = profile })
-		if okNew then
-			quick = obj
-		else
-			warn("[FMenu] quick menu failed to start: " .. tostring(obj))
-		end
+-- optional extras: if one fails to load or start the menu still works.
+--   QuickMenu    hold Tab for the current game's cheats (src/QuickMenu.lua)
+--   PlayerPanel  /isee in chat opens a player list with TP / Watch / Orbit / Mark (src/PlayerPanel.lua)
+local extras = {}
+local function loadExtra(name, args)
+	local okMod, Mod = pcall(import, name)
+	if not okMod then
+		warn(("[FMenu] %s not loaded: %s"):format(name, tostring(Mod)))
+		return
+	end
+	local okNew, obj = pcall(Mod.new, args)
+	if okNew then
+		extras[#extras + 1] = obj
 	else
-		warn("[FMenu] quick menu not loaded: " .. tostring(QuickMenu))
+		warn(("[FMenu] %s failed to start: %s"):format(name, tostring(obj)))
 	end
 end
+loadExtra("QuickMenu", { ui = ui, animations = Animations, profile = profile })
+loadExtra("PlayerPanel", { animations = Animations, notify = Functionality.notify })
 
 genv.FMenu = {
 	profile = profile.name,
@@ -149,8 +153,8 @@ genv.FMenu = {
 		if cfg.autosave then
 			cfg:save()
 		end
-		if quick then
-			pcall(quick.destroy, quick)
+		for _, obj in ipairs(extras) do
+			pcall(obj.destroy, obj)
 		end
 		Functionality.destroy()
 		ui:destroy()
