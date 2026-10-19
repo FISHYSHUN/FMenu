@@ -174,6 +174,10 @@ local baseTabs = {
 			{ type = "text", key = "refresh", label = "Refresh token", placeholder = "from tools/spotify_auth.py", default = "" },
 			{ type = "text", key = "token", label = "Access token (1 h, optional)", placeholder = "quick test instead of the above", default = "" },
 		} },
+		{ header = "Audio" },
+		{ id = "audio", label = "Audio volume", slider = "Volume", value = 50, on = false, fmt = range(0, 100, "%"), opts = {
+			{ type = "choice", key = "scope", label = "Controls", choices = { "Game sounds", "Master volume" }, default = "Game sounds" },
+		} },
 		{ header = "Behaviour" },
 		{ id = "autohide", label = "Auto-hide", slider = "Delay (1-10 s)", value = 33, on = true, fmt = range(1, 10, "s") },
 		{ id = "hudlock", label = "Lock HUD", slider = "Unused", value = 0, on = false },
