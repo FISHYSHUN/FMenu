@@ -111,40 +111,7 @@ local function durationOf(apiKey, artist, title)
 	return durations[id] or nil
 end
 
--- downloads a cover into FMenu/cache and returns a rbxasset url, nil when the executor cannot do it
-local function coverAsset(url)
-	if not (writefile and isfile and getcustomasset) then
-		return nil
-	end
-	local name = (url:match("([^/]+)$") or "cover"):gsub("[^%w%._%-]", "_")
-	if not name:match("%.%w+$") then
-		name = name .. ".png"
-	end
-	pcall(function()
-		if makefolder and isfolder then
-			if not isfolder("FMenu") then
-				makefolder("FMenu")
-			end
-			if not isfolder("FMenu/cache") then
-				makefolder("FMenu/cache")
-			end
-		end
-	end)
-	local path = "FMenu/cache/" .. name
-	if not isfile(path) then
-		local ok, data = pcall(function()
-			return game:HttpGet(url)
-		end)
-		if not ok or type(data) ~= "string" or #data == 0 then
-			return nil
-		end
-		if not pcall(writefile, path, data) then
-			return nil
-		end
-	end
-	local ok, asset = pcall(getcustomasset, path)
-	return ok and asset or nil
-end
+local coverAsset = Util.coverAsset
 
 local function credentials()
 	local g = (getgenv and getgenv()) or _G
@@ -161,8 +128,8 @@ local function credentials()
 end
 
 local function clearPill(ctx)
-	state.id, state.duration, state.missing = nil, nil, 0
-	ctx.ui:setNowPlaying(nil)
+	state.id, state.duration, state.missing, state.info, state.cover = nil, nil, 0, nil, nil
+	ctx.ui:setNowPlaying(nil, "lastfm")
 end
 
 local function poll(ctx)
@@ -201,9 +168,15 @@ local function poll(ctx)
 	local title, artist = tostring(first.name or ""), artistOf(first)
 	local id = artist .. "|" .. title
 	if id == state.id then
+		-- same song: if another source (Spotify) used the pill and let go, put this one back
+		if state.info and not ctx.ui.npActive then
+			ctx.ui:setNowPlaying(state.info, "lastfm")
+			ctx.ui:setCover(state.cover, "lastfm")
+		end
 		return
 	end
 	state.id = id
+	state.cover = nil
 
 	local duration = durationOf(key, artist, title)
 	-- where in the song are we? see the note at the top of the file
@@ -220,7 +193,8 @@ local function poll(ctx)
 	end
 	state.base, state.baseClock, state.duration = elapsed, os.clock(), duration
 
-	ctx.ui:setNowPlaying({ title = title, artist = artist, showProgress = state.cfg.progress ~= false })
+	state.info = { title = title, artist = artist, showProgress = state.cfg.progress ~= false }
+	ctx.ui:setNowPlaying(state.info, "lastfm")
 	if state.cfg.notify then
 		ctx.notify(("%s - %s"):format(artist, title), Color3.fromRGB(139, 125, 255))
 	end
@@ -230,7 +204,8 @@ local function poll(ctx)
 		task.spawn(function()
 			local asset = coverAsset(url)
 			if asset and state.on and state.id == id then
-				ctx.ui:setCover(asset)
+				state.cover = asset
+				ctx.ui:setCover(asset, "lastfm")
 			end
 		end)
 	end
@@ -275,7 +250,7 @@ features.lastfm = {
 		if state.prog >= 0.25 then
 			state.prog = 0
 			if state.id then
-				ctx.ui:setProgress(state.base + (os.clock() - state.baseClock), state.duration)
+				ctx.ui:setProgress(state.base + (os.clock() - state.baseClock), state.duration, "lastfm")
 			end
 		end
 	end,
