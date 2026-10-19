@@ -55,7 +55,9 @@ local LEAD_W = 70
 local LEAD_EXP = UDim2.new(0, 14, 0, 0)
 local LEAD_MIN = UDim2.new(0.5, -LEAD_W / 2, 0, 0)
 local NP_PILL = Vector2.new(332, 54) -- pill size while a song is playing (Last.fm)
-local NP_LEAD = UDim2.new(1, -(LEAD_W + 14), 0, 6) -- the status dot + "FMenu" move to the right end then
+local NP_LEAD = UDim2.new(1, -(LEAD_W + 3), 0, 0) -- the status dot + "FMenu" move to the right end, vertically centered
+local NP_CTL_W = 82 -- extra pill width while the play / skip buttons are shown
+local NP_PRIO = { lastfm = 1, spotify = 2 } -- a higher source keeps the pill while it has a song
 -- vertical layout of the expanded menu: header + tab bar + PANEL_Y.. rows ..GAP, hint line, PAD
 local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 572
 local CELL_H, GAP = 38, 8 -- one row, space between rows
@@ -415,7 +417,7 @@ function UI:_buildShell()
 		BackgroundTransparency = 1,
 		GroupTransparency = 1,
 		Visible = false,
-		ZIndex = 1,
+		ZIndex = 4,
 	}, root)
 	self.np = np
 	self.npCover = make("ImageLabel", {
@@ -470,7 +472,40 @@ function UI:_buildShell()
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = "0:00",
 	}, np)
-	self.npActive = false
+	-- play / skip buttons (only when the source that owns the pill offers them, e.g. Spotify)
+	self.npCtl = make("Frame", {
+		Position = UDim2.fromOffset(226, 15),
+		Size = UDim2.fromOffset(NP_CTL_W - 6, 24),
+		BackgroundTransparency = 1,
+		Visible = false,
+	}, np)
+	local function ctlButton(x, text, action)
+		local b = make("TextButton", {
+			Position = UDim2.fromOffset(x, 0),
+			Size = UDim2.fromOffset(24, 24),
+			BackgroundColor3 = C.panel2,
+			BorderSizePixel = 0,
+			AutoButtonColor = false,
+			Font = Enum.Font.GothamBold,
+			TextSize = 11,
+			TextColor3 = C.text,
+			Text = text,
+		}, self.npCtl)
+		corner(b, 12)
+		self:_surface(b)
+		b.MouseButton1Click:Connect(function()
+			local h = self.npHandlers[self.npSource]
+			if h and h[action] then
+				h[action]()
+			end
+		end)
+		return b
+	end
+	ctlButton(0, "|<", "prev")
+	self.npPlay = ctlButton(26, "||", "toggle")
+	ctlButton(52, ">|", "next")
+	self.npActive, self.npSource, self.npControls = false, nil, false
+	self.npHandlers = {} -- source -> { prev, toggle, next }
 
 	-- handed to Animations for minimize/expand
 	self.refs = {
@@ -1305,7 +1340,7 @@ function UI:minimize()
 
 	local size, leadPos = self:_pillSpec()
 	local t = self.A.collapse(self.refs, size, leadPos)
-	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 3 or 35) })
+	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 6 or 35) })
 	self:_npShow(self.npActive)
 	t.Completed:Once(function()
 		if s.token == token and s.minimized then
@@ -1366,7 +1401,7 @@ end
 -- pill size + where the status dot / title sit while minimized
 function UI:_pillSpec()
 	if self.npActive then
-		return NP_PILL, NP_LEAD
+		return Vector2.new(NP_PILL.X + (self.npControls and NP_CTL_W or 0), NP_PILL.Y), NP_LEAD
 	end
 	return CFG.Pill, LEAD_MIN
 end
@@ -1393,14 +1428,33 @@ function UI:_refreshPill()
 	local size, leadPos = self:_pillSpec()
 	self.A.tween(self.root, "ease", { Size = UDim2.fromOffset(size.X, size.Y) })
 	self.A.tween(self.lead, "ease", { Position = leadPos })
-	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 3 or 35) })
+	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 6 or 35) })
 	self:_npShow(self.npActive)
 end
 
--- info = { title, artist, showProgress? } or nil (nothing playing). The cover arrives later through setCover.
-function UI:setNowPlaying(info)
-	self.npActive = info ~= nil
+-- Several sources can feed the pill (Last.fm, Spotify). `source` names the caller; a source with a higher
+-- priority keeps the pill while it has a song, calls from any source that does not own the pill are ignored.
+local function npDefault(source)
+	return source or "lastfm"
+end
+
+-- the play / skip buttons exist only when the owning source registered handlers (UI:setControls)
+function UI:_updateControls()
+	local on = self.npActive and self.npHandlers[self.npSource] ~= nil
+	self.npControls = on
+	self.npCtl.Visible = on
+end
+
+-- info = { title, artist, showProgress? } or nil (that source has nothing playing). The cover comes later (setCover).
+function UI:setNowPlaying(info, source)
+	source = npDefault(source)
 	if info then
+		local owner = self.npSource
+		if owner and owner ~= source and (NP_PRIO[owner] or 0) > (NP_PRIO[source] or 0) and self.npActive then
+			return -- a stronger source is showing a song right now
+		end
+		self.npSource = source
+		self.npActive = true
 		local title = info.title or ""
 		self.npTitle.Text = title
 		self.npArtist.Text = info.artist or ""
@@ -1411,18 +1465,28 @@ function UI:setNowPlaying(info)
 		self.npBarBack.Visible, self.npTime.Visible = bars, bars
 		self.npBar.Size = UDim2.fromScale(0, 1)
 		self.npTime.Text = "0:00"
+		self.npPlay.Text = "||"
+	else
+		if self.npSource ~= source then
+			return
+		end
+		self.npSource, self.npActive = nil, false
 	end
+	self:_updateControls()
 	self:_refreshPill()
 end
 
-function UI:setCover(asset)
+function UI:setCover(asset, source)
+	if self.npSource ~= npDefault(source) then
+		return
+	end
 	self.npCover.Image = asset or ""
 	self.npLetter.Visible = asset == nil
 end
 
 -- elapsed / duration in seconds (duration nil = unknown, only the time is shown)
-function UI:setProgress(elapsed, duration)
-	if not self.npActive then
+function UI:setProgress(elapsed, duration, source)
+	if not self.npActive or self.npSource ~= npDefault(source) then
 		return
 	end
 	if duration and duration > 0 then
@@ -1432,6 +1496,20 @@ function UI:setProgress(elapsed, duration)
 		self.npBar.Size = UDim2.fromScale(0, 1)
 		self.npTime.Text = fmtTime(elapsed)
 	end
+end
+
+-- play / pause glyph of the middle button
+function UI:setPlaying(playing, source)
+	if self.npSource == npDefault(source) then
+		self.npPlay.Text = playing and "||" or ">"
+	end
+end
+
+-- handlers = { prev, toggle, next } shows the buttons on the pill while `source` owns it, nil removes them
+function UI:setControls(handlers, source)
+	self.npHandlers[npDefault(source)] = handlers
+	self:_updateControls()
+	self:_refreshPill()
 end
 
 -- a gui object whose background follows the menu opacity. base = its transparency when the menu is solid.
