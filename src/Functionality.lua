@@ -16,7 +16,12 @@ local ESP = import("ESP")
 local Defense = import("Defense")
 local Troll = import("Troll")
 local Vehicle = import("Vehicle")
-local LastFm = import("LastFm")
+-- optional: if src/LastFm.lua is missing or broken the menu still loads, just without the Last.fm pill
+local okLastFm, LastFm = pcall(import, "LastFm")
+if not okLastFm or type(LastFm) ~= "table" then
+	warn("[FMenu] Last.fm module not loaded: " .. tostring(LastFm))
+	LastFm = { features = {} }
+end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
