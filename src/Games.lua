@@ -158,6 +158,13 @@ local baseTabs = {
 		{ id = "menuOpacity", label = "Translucent menu", slider = "Opacity", value = 60, on = false, fmt = range(25, 100, "%") },
 		{ id = "compact", label = "Compact mode", slider = "Shrink amount", value = 50, on = false, fmt = range(0, 25, "%") },
 		{ id = "reducedMotion", label = "Reduced motion", slider = "Unused", value = 0, on = false },
+		{ header = "Now playing" },
+		{ id = "lastfm", label = "Last.fm on pill", slider = "Check every", value = 30, on = false, fmt = range(5, 30, "s"), opts = {
+			{ type = "text", key = "user", label = "Last.fm username", placeholder = "username", default = "" },
+			{ type = "text", key = "key", label = "API key", placeholder = "paste your API key", default = "" },
+			{ type = "toggle", key = "progress", label = "Progress bar + time", default = true },
+			{ type = "toggle", key = "notify", label = "Toast on new song", default = false },
+		} },
 		{ header = "Behaviour" },
 		{ id = "autohide", label = "Auto-hide", slider = "Delay (1-10 s)", value = 33, on = true, fmt = range(1, 10, "s") },
 		{ id = "hudlock", label = "Lock HUD", slider = "Unused", value = 0, on = false },
