@@ -147,7 +147,7 @@ local function loadExtra(name, args)
 end
 loadExtra("QuickMenu", { ui = ui, animations = Animations, profile = profile })
 loadExtra("PlayerPanel", { animations = Animations, notify = Functionality.notify })
-loadExtra("ServerShare", { notify = Functionality.notify })
+loadExtra("Share", { notify = Functionality.notify })
 
 genv.FMenu = {
 	profile = profile.name,
