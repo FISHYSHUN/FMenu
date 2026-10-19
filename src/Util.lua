@@ -183,4 +183,40 @@ function Util.pointer(input)
 	return UserInputService:GetMouseLocation()
 end
 
+-- Downloads a web image into FMenu/cache/ and returns a rbxasset url for an ImageLabel (Roblox cannot load web
+-- images itself). nil when the executor has no writefile / getcustomasset or the download fails.
+function Util.coverAsset(url)
+	if not (writefile and isfile and getcustomasset) then
+		return nil
+	end
+	local name = (url:match("([^/]+)$") or "cover"):gsub("[^%w%._%-]", "_")
+	if not name:match("%.%w+$") then
+		name = name .. ".jpg"
+	end
+	pcall(function()
+		if makefolder and isfolder then
+			if not isfolder("FMenu") then
+				makefolder("FMenu")
+			end
+			if not isfolder("FMenu/cache") then
+				makefolder("FMenu/cache")
+			end
+		end
+	end)
+	local path = "FMenu/cache/" .. name
+	if not isfile(path) then
+		local ok, data = pcall(function()
+			return game:HttpGet(url)
+		end)
+		if not ok or type(data) ~= "string" or #data == 0 then
+			return nil
+		end
+		if not pcall(writefile, path, data) then
+			return nil
+		end
+	end
+	local ok, asset = pcall(getcustomasset, path)
+	return ok and asset or nil
+end
+
 return Util
