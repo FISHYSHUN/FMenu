@@ -23,6 +23,7 @@ getgenv().FMENU_BASE = "https://raw.githubusercontent.com/<user>/FMenu/<branch>/
 | Mouse wheel over a slider | Nudge it |
 | **Keybind** in the popover | Click it, press a key; that key toggles the row (Backspace clears, Escape cancels). Saved with the config |
 | **reset** in the popover | Put that row back to its defaults (also clears its keybind) |
+| Mouse wheel / drag / arrows on the tab bar | Scroll the tabs. Three are visible at once and the bar loops: scrolling either way never ends and never shows empty space |
 | Drag a HUD label | Move it (position is saved) |
 | `Insert` or click the header | Hide / show the menu |
 
@@ -42,7 +43,7 @@ Rows whose slider is "Unused" and that have no options do nothing on right-click
 
 ## Now playing on the pill (Last.fm)
 
-When the menu is minimized and a song is playing, the pill grows into a wider card: round cover on the left, artist, title and a progress bar with the time in the middle, the status dot and "FMenu" on the right. It shrinks back to the normal pill when nothing is playing.
+When the menu is minimized and a song is playing, the pill becomes the player: round cover on the left, artist, title and a progress bar with the time next to it. The status dot and the "FMenu" text fade out while a song is showing, so only the player is visible. It shrinks back to the normal pill when nothing is playing.
 
 Setup:
 1. Create a free API key at `https://www.last.fm/api/account/create`.
@@ -58,7 +59,7 @@ Limits:
 
 ## Spotify on the pill (with skip buttons)
 
-Spotify is a second source for the pill. It shows the real playback position instead of an estimate and adds three buttons: previous, pause / resume and next. It takes priority over Last.fm while it has a song; when it stops, Last.fm takes the pill back.
+Spotify is a second source for the pill. It shows the real playback position instead of an estimate and adds three small buttons under the progress bar and timestamp, inside the pill: previous, pause / resume and next. They are drawn as filled icons (bar + triangle, two bars, triangle + bar) and animate on hover, press and play / pause. It takes priority over Last.fm while it has a song; when it stops, Last.fm takes the pill back.
 
 Setup:
 1. `https://developer.spotify.com/dashboard` > Create app. Redirect URI: `http://127.0.0.1:8888/callback`, tick Web API.
@@ -70,6 +71,17 @@ Notes:
 - Reading what is playing works for free accounts; pause / skip need **Spotify Premium** and an active device (open Spotify on a phone or computer).
 - Needs `request()` / `http_request()` in the executor.
 - Client secret and refresh token are saved in plain text in `FMenu/<game>.json`. Do not share that file.
+
+## Audio volume
+
+**Config > Audio volume** is a 0-100 volume slider for the whole game (right-click the row, the slider is the first control; 100 = the game's normal volume). Switch the row on to apply it.
+
+- **Game sounds** (default): scales every Sound that exists now and every Sound the game creates later. When the game changes a sound's volume itself the new value is scaled too. Switching the row off puts every sound back.
+- **Master volume**: changes Roblox's own game volume instead (also covers Roblox's built-in sounds) and restores it when switched off.
+
+## Menu fit
+
+A tab that is taller than the screen now shrinks the whole menu (down to 65%) so everything stays visible, and only scrolls if that is still not enough. Compact mode sets the base size and the auto-fit works on top of it. The menu also re-measures the screen every frame, so it can no longer stay at a stale height.
 
 ## Translucent menu
 
@@ -169,6 +181,7 @@ src/
   Vehicle.lua               vehicle controller tab + features
   LastFm.lua                Last.fm now playing on the pill
   Spotify.lua               Spotify now playing + prev / pause / skip on the pill
+  Audio.lua                 0-100 volume slider for current and incoming game audio
 tools/
   spotify_auth.py           one-time helper that prints your Spotify refresh token
   Config.lua                save / load
