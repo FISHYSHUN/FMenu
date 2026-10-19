@@ -21,7 +21,8 @@ getgenv().FMENU_BASE = "https://raw.githubusercontent.com/<user>/FMenu/<branch>/
 | Click a row | Toggle the feature |
 | Right-click / long-press a row | Open its settings popover |
 | Mouse wheel over a slider | Nudge it |
-| **reset** in the popover | Put that row back to its defaults |
+| **Keybind** in the popover | Click it, press a key; that key toggles the row (Backspace clears, Escape cancels). Saved with the config |
+| **reset** in the popover | Put that row back to its defaults (also clears its keybind) |
 | Drag a HUD label | Move it (position is saved) |
 | `Insert` or click the header | Hide / show the menu |
 
@@ -33,10 +34,46 @@ Rows whose slider is "Unused" and that have no options do nothing on right-click
 |---|---|
 | **Main** | Speed, jump, infinite jump, bunny hop, fly, noclip, click teleport, gravity, anti-void, auto-clicker, anti-AFK |
 | **Visual** | Player ESP, Box ESP, tracers, time of day, brightness, fullbright, no fog, low graphics, FOV, hold-C zoom, max zoom out |
+| **Vehicle** | Vehicle controller, see below |
 | **Troll** | See below |
 | **Defense** | Anti-fling, no player collision, stabilizer, cheat detection, flag markers |
 | *Game tab* | Only in recognised games (MM2, Rivals, Natural Disaster Survival) |
 | **Config** | Overlay and stat labels, crosshair, menu look, behaviour, saving |
+
+## Now playing on the pill (Last.fm)
+
+When the menu is minimized and a song is playing, the pill grows into a wider card: round cover on the left, artist, title and a progress bar with the time in the middle, the status dot and "FMenu" on the right. It shrinks back to the normal pill when nothing is playing.
+
+Setup:
+1. Create a free API key at `https://www.last.fm/api/account/create`.
+2. Make sure your player scrobbles to your Last.fm account (Spotify, Apple Music, the desktop scrobbler...).
+3. **Config > Last.fm on pill**: switch it on, right-click it and enter your username and API key. The slider is how often it checks (5 to 30 s).
+
+Alternative: `getgenv().FMENU_LASTFM = { user = "name", key = "apikey" }` before running the loader.
+
+Limits:
+- Last.fm does not report the playback position. The time is an estimate (see the top of `src/LastFm.lua`) and does not notice pausing or seeking.
+- Covers need `writefile` and `getcustomasset` in the executor (cached in `FMenu/cache/`). Without them the circle shows the first letter of the title.
+- Your API key is saved in plain text in the config file, so do not share `FMenu/*.json`.
+
+## Spotify on the pill (with skip buttons)
+
+Spotify is a second source for the pill. It shows the real playback position instead of an estimate and adds three buttons: previous, pause / resume and next. It takes priority over Last.fm while it has a song; when it stops, Last.fm takes the pill back.
+
+Setup:
+1. `https://developer.spotify.com/dashboard` > Create app. Redirect URI: `http://127.0.0.1:8888/callback`, tick Web API.
+2. On your computer run `python tools/spotify_auth.py <client_id> <client_secret>`. Your browser opens, you press Agree, and it prints a **refresh token** (one-time step).
+3. **Config > Spotify on pill**: switch it on, right-click it and paste Client ID, Client secret and Refresh token.
+   For a quick test you can paste a 1 hour access token into "Access token" instead.
+
+Notes:
+- Reading what is playing works for free accounts; pause / skip need **Spotify Premium** and an active device (open Spotify on a phone or computer).
+- Needs `request()` / `http_request()` in the executor.
+- Client secret and refresh token are saved in plain text in `FMenu/<game>.json`. Do not share that file.
+
+## Translucent menu
+
+**Config > Translucent menu** now fades every menu surface together: the window, tab bar, tab buttons, rows, value badges, countdown bar, choice buttons and toasts. The settings popover never goes below 60% opacity so it stays readable over the game. Text and switches stay solid. HUD labels (FPS, ping...) have their own background option.
 
 ## Per-feature settings
 
@@ -49,10 +86,47 @@ Everything that used to live in the Style tab is now in the right-click menu of 
 - **Crosshair:** thickness, opacity, custom color.
 - **HUD labels (overlay, FPS, ping, clock, coordinates, speedometer):** text size, background opacity, custom color.
 - **Auto-clicker:** only click while holding left mouse (on by default).
+- **Infinite jump:** limit on air jumps (0 = unlimited).
+- **Bunny hop:** speed gained per hop and a speed cap.
+- **Anti-void:** how far above the void it triggers and how high it puts you back.
+- **FOV:** re-applied every frame, so games that reset it (sprint, scopes) no longer win.
+- **Zoom:** choose the key (C / Z / X / V / Q / E) and smooth or instant.
+- **Rivals aim assist / lock:** choose the aim key (Right mouse / Left mouse / Shift / Always).
 - **Defense:** which detectors run (speed / teleport / fly), alert cooldown, how long a flag lasts.
 - **Rivals:** aim dead zone, edge falloff, FOV ring look, trigger interval, enemy ESP options.
 - **MM2:** coin collect interval, role ESP options.
 - **NDS:** sky platform size.
+
+## Vehicle tab
+
+The controller detects your car automatically: whenever your humanoid sits in an unanchored seat (`VehicleSeat` or a plain `Seat` on a custom car), that seat's assembly is the vehicle. Stand up and everything idles; sit in another car and it follows you.
+
+| Row | What it does |
+|---|---|
+| Vehicle info | Draggable readout: car name and speed (st/s, km/h or mph) |
+| Top speed | Raises the speed ceiling (`MaxSpeed` plus extra push); option: acceleration |
+| Nitro | Hold a key for extra forward acceleration; options: key, max boost speed |
+| Drift | Velocity direction lags the car's heading so it slides. Slider = how long it slides; options: drift while holding (Always / Shift / Ctrl / Alt / E / Q), hold speed while sliding |
+| Steering | Sets the yaw rate directly; option: less turning at speed |
+| Brake | Hold a key to shed speed fast |
+| Stability | Downforce plus anti-roll |
+| Auto-flip | Rights the car when upside down; option: instant flip key |
+| Car jump | Hop key |
+| Stay seated | Stops Space from ejecting you |
+
+Input comes from the seat (`ThrottleFloat` / `SteerFloat`) or W A S D / arrows on custom chassis. Forward is the seat's `LookVector`. Games with server-driven cars or their own anti-cheat can override or rubber-band this.
+
+## Cheat level (Blatant / Semi / Legit)
+
+Cheats that scale have a **Mode** option in their right-click menu: Speed, High jump, Fly, Auto-clicker, the vehicle Top speed / Nitro / Car jump, and in Rivals Aim assist, Aim lock, FOV ring and Triggerbot.
+
+| Mode | Effect |
+|---|---|
+| Blatant | Full slider values (default, same as before) |
+| Semi | About 55% of the boost above normal; aim pull 60%, FOV 70%, lock smoothing at least 35%, trigger delay at least 80 ms plus random jitter |
+| Legit | About 25% of the boost; aim pull 35%, FOV 50%, smoothing at least 70%, trigger delay at least 150 ms plus more jitter |
+
+Set one cheat at a time in its own menu, or use **Config > Cheat level > Apply level to all**: switch it on and pick the level with its slider to set every Mode at once. Settings saved earlier are not overwritten when the menu starts.
 
 ## Troll tab
 
@@ -92,6 +166,11 @@ src/
   ESP.lua                   highlights, boxes, per-instance styles, option presets
   Defense.lua               anti-fling, detectors, flag markers
   Troll.lua                 troll tab + features
+  Vehicle.lua               vehicle controller tab + features
+  LastFm.lua                Last.fm now playing on the pill
+  Spotify.lua               Spotify now playing + prev / pause / skip on the pill
+tools/
+  spotify_auth.py           one-time helper that prints your Spotify refresh token
   Config.lua                save / load
   Games.lua                 tab definitions, game detection
   Util.lua                  shared helpers
@@ -118,6 +197,7 @@ A row is `{ id, label, slider, value, on, fmt?, opts?, button? }`. The `id` must
 | `hue` | rainbow track, range 0 to 1 | number |
 | `toggle` | none | boolean |
 | `choice` | `choices` | the chosen string |
+| `text` | `placeholder?` | string (a text box) |
 
 - `slider = "Unused"` hides the main 0-100 slider.
 - `button = true` makes a click-to-run row; `set` is called with `enabled = true` per click.
