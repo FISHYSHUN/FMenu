@@ -16,6 +16,13 @@ local ESP = import("ESP")
 local Defense = import("Defense")
 local Troll = import("Troll")
 local Vehicle = import("Vehicle")
+-- optional like Last.fm: a missing src/Spotify.lua only disables the Spotify row
+local okSpotify, Spotify = pcall(import, "Spotify")
+if not okSpotify or type(Spotify) ~= "table" then
+	warn("[FMenu] Spotify module not loaded: " .. tostring(Spotify))
+	Spotify = { features = {} }
+end
+
 -- optional: if src/LastFm.lua is missing or broken the menu still loads, just without the Last.fm pill
 local okLastFm, LastFm = pcall(import, "LastFm")
 if not okLastFm or type(LastFm) ~= "table" then
@@ -1421,6 +1428,11 @@ end
 
 -- Last.fm now playing on the pill (src/LastFm.lua)
 for id, def in pairs(LastFm.features) do
+	features[id] = def
+end
+
+-- Spotify on the pill (src/Spotify.lua)
+for id, def in pairs(Spotify.features) do
 	features[id] = def
 end
 
