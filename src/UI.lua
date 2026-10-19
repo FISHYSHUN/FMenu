@@ -36,6 +36,7 @@ UI.CONFIG = {
 	ScreenMargin = 24, -- free space kept under the menu before a tab starts scrolling
 	RepeatDelay = 0.35,
 	RepeatRate = 0.04,
+	MinFit = 0.65, -- a tall tab shrinks the whole menu down to this fraction before its rows start scrolling
 }
 
 UI.THEME = {
@@ -54,9 +55,10 @@ local CFG, C = UI.CONFIG, UI.THEME
 local LEAD_W = 70
 local LEAD_EXP = UDim2.new(0, 14, 0, 0)
 local LEAD_MIN = UDim2.new(0.5, -LEAD_W / 2, 0, 0)
-local NP_PILL = Vector2.new(332, 54) -- pill size while a song is playing (Last.fm)
-local NP_LEAD = UDim2.new(1, -(LEAD_W + 3), 0, 0) -- the status dot + "FMenu" move to the right end, vertically centered
-local NP_CTL_W = 82 -- extra pill width while the play / skip buttons are shown
+local NP_PILL = Vector2.new(250, 54) -- pill size while a song is playing: only the player, no status dot / title
+local NP_CTL_H = 24 -- extra pill height while the prev / play / next buttons are shown (they sit under the timestamp)
+local NP_CTL_Y = 52
+local CTL_W, CTL_H, CTL_GAP = 28, 20, 6
 local NP_PRIO = { lastfm = 1, spotify = 2 } -- a higher source keeps the pill while it has a song
 -- vertical layout of the expanded menu: header + tab bar + PANEL_Y.. rows ..GAP, hint line, PAD
 local PANEL_X, PANEL_Y, PANEL_W = 14, 86, 572
@@ -65,6 +67,10 @@ local HEAD_H, SEC_GAP = 20, 10 -- section title line, space between sections
 local HINT_H, PAD = 14, 8
 local CHROME = PANEL_Y + GAP + HINT_H + PAD -- everything that is not the row panel
 local PANEL_POS = UDim2.fromOffset(PANEL_X, PANEL_Y)
+-- tab bar: TAB_SLOTS tabs are visible at once, the rest loops past (wheel / drag / arrows)
+local TAB_SLOTS, TAB_GAP, TAB_ARROW = 3, 4, 22
+local TAB_CLIP_X = 4 + TAB_ARROW + 4
+local TAB_CLIP_W = PANEL_W - 2 * TAB_CLIP_X
 local POP_W = 290
 local POP_HEAD = 34
 local HUE_STOPS = {}
@@ -165,6 +171,78 @@ local function sane(d, v)
 end
 
 ---------------------------------------------------------------------
+-- drawn icons. Roblox has no vector shapes and the fonts have no media glyphs, so the icons are built from
+-- plain frames: bars are rectangles, triangles are stacks of 1px wide columns.
+---------------------------------------------------------------------
+local function rect(parent, x, y, w, h, color)
+	return make("Frame", {
+		Position = UDim2.fromOffset(x, y),
+		Size = UDim2.fromOffset(w, h),
+		BackgroundColor3 = color,
+		BorderSizePixel = 0,
+	}, parent)
+end
+
+-- filled triangle w wide and h tall, pointing "left" or "right", starting at x0
+local function triangle(parent, x0, w, h, dir, color)
+	for c = 0, w - 1 do
+		local t = dir == "right" and (1 - (c + 0.5) / w) or ((c + 0.5) / w)
+		local ch = math.max(2, 2 * math.floor(h * t / 2 + 0.5)) -- even heights stay centered on whole pixels
+		rect(parent, x0 + c, (h - ch) / 2, 1, ch, color)
+	end
+end
+
+local function iconFrame(parent, w, h)
+	return make("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(w, h),
+		BackgroundTransparency = 1,
+	}, parent)
+end
+
+local ICONS = {}
+
+function ICONS.prev(parent, color) -- |<  (bar + triangle pointing left)
+	local f = iconFrame(parent, 10, 10)
+	rect(f, 0, 0, 2, 10, color)
+	triangle(f, 2, 8, 10, "left", color)
+	return f
+end
+
+function ICONS.next(parent, color) -- >|  (triangle pointing right + bar)
+	local f = iconFrame(parent, 10, 10)
+	triangle(f, 0, 8, 10, "right", color)
+	rect(f, 8, 0, 2, 10, color)
+	return f
+end
+
+function ICONS.play(parent, color) -- the normal play triangle
+	local f = iconFrame(parent, 8, 10)
+	triangle(f, 0, 8, 10, "right", color)
+	return f
+end
+
+function ICONS.pause(parent, color) -- two filled bars
+	local f = iconFrame(parent, 10, 10)
+	rect(f, 0, 0, 3, 10, color)
+	rect(f, 7, 0, 3, 10, color)
+	return f
+end
+
+function ICONS.arrow(parent, dir, color) -- tab bar arrows
+	local f = iconFrame(parent, 4, 8)
+	triangle(f, 0, 4, 8, dir, color)
+	return f
+end
+
+local function tintIcon(A, icon, color)
+	for _, piece in ipairs(icon:GetChildren()) do
+		A.tween(piece, "fast", { BackgroundColor3 = color })
+	end
+end
+
+---------------------------------------------------------------------
 -- construction
 ---------------------------------------------------------------------
 function UI.new(deps)
@@ -195,6 +273,9 @@ function UI.new(deps)
 	self.surfaceT = 0 -- background transparency of the menu surfaces (see UI:setOpacity)
 	self.alpha = 1 -- menu opacity, 1 = solid. Everything registered with UI:_surface follows it.
 	self.surfaces = setmetatable({}, { __mode = "k" }) -- gui object -> its transparency at full opacity
+	self.userScale, self.effScale = 1, 1 -- Compact mode's scale, and that scale after the auto-fit to the screen
+	self.tabShown, self.tabTarget = 0, 0 -- tab bar scroll position in tabs (any number, wraps around the ring)
+	self.tabCircular, self.tabSlots, self.tabW, self.tabStep = false, TAB_SLOTS, 100, 104
 	self._conns = {}
 
 	self:_buildShell()
@@ -293,7 +374,7 @@ function UI:_buildShell()
 	}, self.lead)
 	corner(self.dot, 5)
 
-	make("TextLabel", {
+	self.leadText = make("TextLabel", {
 		Text = self.title,
 		Position = UDim2.fromOffset(19, 0),
 		Size = UDim2.new(0, 48, 1, 0),
@@ -315,7 +396,7 @@ function UI:_buildShell()
 		TextXAlignment = Enum.TextXAlignment.Right,
 	}, self.header)
 
-	-- tab bar (buttons are added in build)
+	-- tab bar: three tabs are visible at once, the rest scrolls past in a loop (wheel, drag or the arrows)
 	self.tabBar = make("Frame", {
 		Name = "Tabs",
 		Position = UDim2.fromOffset(14, 44),
@@ -324,15 +405,53 @@ function UI:_buildShell()
 		BorderSizePixel = 0,
 	}, self.body)
 	corner(self.tabBar, 10)
-	make("UIPadding", {
-		PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4),
-		PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4),
+	self.tabClip = make("Frame", {
+		Name = "TabClip",
+		Position = UDim2.fromOffset(TAB_CLIP_X, 4),
+		Size = UDim2.fromOffset(TAB_CLIP_W, 24),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
 	}, self.tabBar)
-	make("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 4),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, self.tabBar)
+	self.tabArrows = {}
+	for _, dir in ipairs({ -1, 1 }) do
+		local b = make("TextButton", {
+			Name = dir < 0 and "TabsLeft" or "TabsRight",
+			Position = UDim2.fromOffset(dir < 0 and 4 or PANEL_W - 4 - TAB_ARROW, 4),
+			Size = UDim2.fromOffset(TAB_ARROW, 24),
+			BackgroundColor3 = C.panel,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AutoButtonColor = false,
+			Text = "",
+			Visible = false,
+		}, self.tabBar)
+		corner(b, 7)
+		local icon = ICONS.arrow(b, dir < 0 and "left" or "right", C.muted)
+		local sc = make("UIScale", { Scale = 1 }, b)
+		b.MouseEnter:Connect(function()
+			self.A.hover(b, true)
+			tintIcon(self.A, icon, C.text)
+		end)
+		b.MouseLeave:Connect(function()
+			self.A.hover(b, false)
+			tintIcon(self.A, icon, C.muted)
+			self.A.press(sc, false)
+		end)
+		b.InputBegan:Connect(function(input)
+			if isPress(input) then
+				self.A.press(sc, true)
+			end
+		end)
+		b.InputEnded:Connect(function(input)
+			if isPress(input) then
+				self.A.press(sc, false)
+			end
+		end)
+		b.MouseButton1Click:Connect(function()
+			self:_scrollTabs(dir)
+		end)
+		self.tabArrows[#self.tabArrows + 1] = b
+	end
 
 	-- pinned to the bottom of the body, so it always sits right under the last row
 	self.hint = make("TextLabel", {
@@ -410,7 +529,8 @@ function UI:_buildShell()
 		PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 10),
 	}, self.popScroll)
 
-	-- now playing: shown on the pill (menu minimized) while a song is playing, see UI:setNowPlaying
+	-- now playing: shown on the pill (menu minimized) while a song is playing, see UI:setNowPlaying.
+	-- While it is shown the status dot and the "FMenu" text fade out, the pill is only the player.
 	local np = make("CanvasGroup", {
 		Name = "NowPlaying",
 		Size = UDim2.fromScale(1, 1),
@@ -441,7 +561,7 @@ function UI:_buildShell()
 	local function npText(y, h, size, font, color, text)
 		return make("TextLabel", {
 			Position = UDim2.fromOffset(54, y),
-			Size = UDim2.fromOffset(160, h),
+			Size = UDim2.fromOffset(186, h),
 			BackgroundTransparency = 1,
 			Font = font,
 			TextSize = size,
@@ -455,7 +575,7 @@ function UI:_buildShell()
 	self.npTitle = npText(18, 16, 12, Enum.Font.GothamBold, C.text, "")
 	self.npBarBack = make("Frame", {
 		Position = UDim2.fromOffset(54, 38),
-		Size = UDim2.fromOffset(88, 4),
+		Size = UDim2.fromOffset(96, 4),
 		BackgroundColor3 = C.line,
 		BorderSizePixel = 0,
 	}, np)
@@ -463,8 +583,8 @@ function UI:_buildShell()
 	self.npBar = make("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent, BorderSizePixel = 0 }, self.npBarBack)
 	corner(self.npBar, 2)
 	self.npTime = make("TextLabel", {
-		Position = UDim2.fromOffset(148, 33),
-		Size = UDim2.fromOffset(72, 14),
+		Position = UDim2.fromOffset(156, 33),
+		Size = UDim2.fromOffset(80, 14),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham,
 		TextSize = 10,
@@ -472,40 +592,79 @@ function UI:_buildShell()
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = "0:00",
 	}, np)
-	-- play / skip buttons (only when the source that owns the pill offers them, e.g. Spotify)
-	self.npCtl = make("Frame", {
-		Position = UDim2.fromOffset(226, 15),
-		Size = UDim2.fromOffset(NP_CTL_W - 6, 24),
+
+	-- previous / play-pause / next, small, centered UNDER the progress bar and timestamp, inside the pill.
+	-- Only exists while the source that owns the pill offers controls (Spotify). Drawn icons, see ICONS.
+	self.npCtl = make("CanvasGroup", {
+		Name = "Controls",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, NP_CTL_Y),
+		Size = UDim2.fromOffset(CTL_W * 3 + CTL_GAP * 2, CTL_H),
 		BackgroundTransparency = 1,
+		GroupTransparency = 1,
 		Visible = false,
 	}, np)
-	local function ctlButton(x, text, action)
+	local function ctlButton(index)
 		local b = make("TextButton", {
-			Position = UDim2.fromOffset(x, 0),
-			Size = UDim2.fromOffset(24, 24),
+			Position = UDim2.fromOffset((index - 1) * (CTL_W + CTL_GAP), 0),
+			Size = UDim2.fromOffset(CTL_W, CTL_H),
 			BackgroundColor3 = C.panel2,
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			AutoButtonColor = false,
-			Font = Enum.Font.GothamBold,
-			TextSize = 11,
-			TextColor3 = C.text,
-			Text = text,
+			Text = "",
 		}, self.npCtl)
-		corner(b, 12)
-		self:_surface(b)
-		b.MouseButton1Click:Connect(function()
-			local h = self.npHandlers[self.npSource]
-			if h and h[action] then
-				h[action]()
+		corner(b, CTL_H / 2)
+		local sc = make("UIScale", { Scale = 1 }, b)
+		b.MouseEnter:Connect(function()
+			self.A.hover(b, true)
+		end)
+		b.MouseLeave:Connect(function()
+			self.A.hover(b, false)
+			self.A.press(sc, false)
+		end)
+		b.InputBegan:Connect(function(input)
+			if isPress(input) then
+				self.A.press(sc, true)
+			end
+		end)
+		b.InputEnded:Connect(function(input)
+			if isPress(input) then
+				self.A.press(sc, false)
 			end
 		end)
 		return b
 	end
-	ctlButton(0, "|<", "prev")
-	self.npPlay = ctlButton(26, "||", "toggle")
-	ctlButton(52, ">|", "next")
+	local prevBtn, playBtn, nextBtn = ctlButton(1), ctlButton(2), ctlButton(3)
+	local prevIcon = ICONS.prev(prevBtn, C.text)
+	local nextIcon = ICONS.next(nextBtn, C.text)
+	-- play and pause both live in the middle button, one is scaled to nothing (see UI:_setPlayGlyph)
+	self.npPauseIcon = ICONS.pause(playBtn, C.text)
+	self.npPlayIcon = ICONS.play(playBtn, C.text)
+	self.npPauseScale = make("UIScale", { Scale = 1 }, self.npPauseIcon)
+	self.npPlayScale = make("UIScale", { Scale = 0.01 }, self.npPlayIcon)
+	self.npPlayIcon.Visible = false
+	self.npIsPlaying = true
+	local function fire(action)
+		local h = self.npHandlers[self.npSource]
+		if h and h[action] then
+			h[action]()
+		end
+	end
+	prevBtn.MouseButton1Click:Connect(function()
+		self.A.nudge(prevIcon, -4)
+		fire("prev")
+	end)
+	nextBtn.MouseButton1Click:Connect(function()
+		self.A.nudge(nextIcon, 4)
+		fire("next")
+	end)
+	playBtn.MouseButton1Click:Connect(function()
+		fire("toggle")
+	end)
 	self.npActive, self.npSource, self.npControls = false, nil, false
 	self.npHandlers = {} -- source -> { prev, toggle, next }
+	self._npFrac = 0
 
 	-- handed to Animations for minimize/expand
 	self.refs = {
@@ -523,11 +682,28 @@ end
 -- tabs = { { name = "Main", rows = { { id, label, slider, value, on, fmt? }, ... } }, ... }
 function UI:build(tabs)
 	local n = #tabs
+	local slots = math.min(n, TAB_SLOTS)
+	self.tabSlots = slots
+	self.tabCircular = n > slots
+	local clipW = TAB_CLIP_W
+	if not self.tabCircular then
+		-- three tabs or fewer: nothing to scroll, no arrows, the tabs share the whole bar
+		clipW = PANEL_W - 8
+		self.tabClip.Position = UDim2.fromOffset(4, 4)
+		self.tabClip.Size = UDim2.fromOffset(clipW, 24)
+	end
+	for _, a in ipairs(self.tabArrows) do
+		a.Visible = self.tabCircular
+	end
+	self.tabW = (clipW - (slots - 1) * TAB_GAP) / slots
+	self.tabStep = self.tabW + TAB_GAP
+
 	for i, tab in ipairs(tabs) do
 		local tbtn = make("TextButton", {
 			LayoutOrder = i,
 			Text = tab.name,
-			Size = UDim2.new(1 / n, -((n - 1) * 4) / n, 1, 0),
+			Position = UDim2.fromOffset((i - 1) * self.tabStep, 0),
+			Size = UDim2.fromOffset(self.tabW, 24),
 			AutoButtonColor = false,
 			BackgroundColor3 = C.panel,
 			BackgroundTransparency = i == 1 and self.surfaceT or 1,
@@ -535,7 +711,7 @@ function UI:build(tabs)
 			Font = Enum.Font.GothamBold,
 			TextSize = 12,
 			TextColor3 = i == 1 and C.text or C.muted,
-		}, self.tabBar)
+		}, self.tabClip)
 		corner(tbtn, 7)
 		self.tabButtons[i] = tbtn
 		-- number of features that are on inside this tab (hidden at 0)
@@ -558,7 +734,10 @@ function UI:build(tabs)
 		self.tabBadges[i] = badge
 		self.tabRows[i] = {}
 		table.insert(self._conns, tbtn.MouseButton1Click:Connect(function()
-			self:_selectTab(i)
+			self:_onTabClick(i)
+		end))
+		table.insert(self._conns, tbtn.InputBegan:Connect(function(input)
+			self:_beginTabDrag(input)
 		end))
 
 		-- panel = clipped, sized to the tab's rows (animated as a whole when switching tabs).
@@ -575,7 +754,7 @@ function UI:build(tabs)
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			ScrollBarThickness = 0,
-			ScrollBarImageColor3 = C.line,
+			ScrollBarImageColor3 = C.muted,
 			CanvasSize = UDim2.new(),
 			AutomaticCanvasSize = Enum.AutomaticSize.Y,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
@@ -646,7 +825,13 @@ function UI:build(tabs)
 		end
 		self.tabNatural[i] = natural
 	end
+	if self.tabCircular then
+		self.tabShown = -math.floor(slots / 2) -- first tab in the middle slot, the last one beside it
+		self.tabTarget = self.tabShown
+	end
+	self:_layoutTabs()
 	self.built = true
+	self._vp = self:_viewport()
 	self:_applyHeight(false)
 	self:refreshStatus()
 end
@@ -1249,37 +1434,63 @@ end
 -- The menu is exactly as tall as the active tab needs: header, tab bar, its rows, hint line. Rows sit in
 -- a two column grid per section, so 7 rows take 4 grid lines. When that would run off the screen the panel is capped
 -- and its rows scroll instead.
--- returns panelHeight, totalMenuHeight, naturalPanelHeight
+-- returns panelHeight, totalMenuHeight, naturalPanelHeight, scale (layout units, scale = Compact mode x auto-fit)
 function UI:_layoutFor(i)
 	local natural = self.tabNatural[i] or 0
-	local vpY = self.gui.AbsoluteSize.Y
-	if vpY <= 0 then
-		local cam = workspace.CurrentCamera
-		vpY = cam and cam.ViewportSize.Y or 720
-	end
-	local maxTotal = (vpY - CFG.TopOffset - CFG.ScreenMargin) / self.scale.Scale
+	local vp = self:_viewport()
+	local user = self.userScale
+	-- A tab that is taller than the screen first shrinks the WHOLE menu (down to CFG.MinFit) so nothing is cut off,
+	-- and only scrolls when even that is not enough. (Before, it just cut the rows off and you had to switch on
+	-- Compact mode or change tab to see them.)
+	local avail = vp.Y - CFG.TopOffset - CFG.ScreenMargin
+	local fitH = avail / math.max(1, (natural + CHROME) * user)
+	local fitW = (vp.X - 12) / (CFG.Width * user)
+	local eff = user * math.clamp(math.min(fitH, fitW, 1), CFG.MinFit, 1)
+	local maxTotal = avail / eff
 	local panelH = natural
 	if natural + CHROME > maxTotal then
 		panelH = math.max(CELL_H, maxTotal - CHROME)
 	end
-	return panelH, panelH + CHROME, natural
+	return panelH, panelH + CHROME, natural, eff
 end
 
--- sizes tab i's panel, returns the total menu height that goes with it
+-- the real screen size. A freshly mounted gui reports 0 until it has been laid out once, and the camera's
+-- ViewportSize can be a placeholder that early, so anything implausibly small falls back to a sane default.
+function UI:_viewport()
+	local v = self.gui.AbsoluteSize
+	if v.X >= 200 and v.Y >= 200 then
+		return v
+	end
+	local cam = workspace.CurrentCamera
+	v = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	if v.X < 200 or v.Y < 200 then
+		v = Vector2.new(1280, 720)
+	end
+	return v
+end
+
+-- sizes tab i's panel, returns the total menu height and the scale that go with it
 function UI:_sizePanel(i)
-	local panelH, total, natural = self:_layoutFor(i)
+	local panelH, total, natural, eff = self:_layoutFor(i)
 	self.panels[i].Size = UDim2.fromOffset(PANEL_W, panelH)
 	self.scrolls[i].ScrollBarThickness = natural > panelH and 3 or 0
-	return total
+	return total, eff
 end
 
 -- re-fits the menu to the active tab (after build, scale change or a viewport resize)
 function UI:_applyHeight(animate)
 	local s = self.state
-	local total = self:_sizePanel(s.tab)
+	local total, eff = self:_sizePanel(s.tab)
 	self.expanded = Vector2.new(CFG.Width, total)
+	self.effScale = eff
+	local scale = s.minimized and self.userScale or eff -- the pill is not auto-fitted
+	if animate then
+		self.A.tween(self.scale, "ease", { Scale = scale })
+	else
+		self.A.snap(self.scale, { Scale = scale })
+	end
 	if s.minimized then
-		self.body.Size = UDim2.fromOffset(CFG.Width, total) -- hidden, root keeps the pill size
+		self.A.snap(self.body, { Size = UDim2.fromOffset(CFG.Width, total) }) -- hidden, root keeps the pill size
 		return
 	end
 	self.A.resize(self.refs, self.expanded, animate)
@@ -1302,7 +1513,10 @@ function UI:_selectTab(i)
 	end
 
 	self.scrolls[i].CanvasPosition = Vector2.zero
-	self.expanded = Vector2.new(CFG.Width, self:_sizePanel(i))
+	local total, eff = self:_sizePanel(i)
+	self.expanded = Vector2.new(CFG.Width, total)
+	self.effScale = eff
+	self.A.tween(self.scale, "ease", { Scale = eff })
 
 	local oldPanel = self.panels[prev]
 	self.A.slideOut(oldPanel, PANEL_POS, -dir * CFG.SlideDistance).Completed:Once(function()
@@ -1313,6 +1527,95 @@ function UI:_selectTab(i)
 	self.A.slideIn(self.panels[i], PANEL_POS, dir * CFG.SlideDistance)
 	self.A.resize(self.refs, self.expanded, true)
 	self:_startCountdown()
+end
+
+---------------------------------------------------------------------
+-- tab bar carousel
+---------------------------------------------------------------------
+-- Tabs sit on a ring: scrolling in either direction never ends and always lands on a tab, never on empty space.
+-- tabShown / tabTarget are positions in tabs (any real number); tab k (0-based) is drawn at slot
+-- ((k - position) wrapped into [-1, n-1)), so a tab that leaves on one side re-enters on the other.
+function UI:_layoutTabs()
+	local n = #self.tabButtons
+	if n == 0 then
+		return
+	end
+	if not self.tabCircular then
+		for k, b in ipairs(self.tabButtons) do
+			b.Position = UDim2.fromOffset((k - 1) * self.tabStep, 0)
+		end
+		return
+	end
+	for k, b in ipairs(self.tabButtons) do
+		local p = (k - self.tabShown) % n - 1 -- == (k-1 - shown + 1) % n - 1
+		local visible = p > -1 and p < self.tabSlots
+		b.Visible = visible
+		if visible then
+			b.Position = UDim2.fromOffset(math.floor(p * self.tabStep + 0.5), 0)
+		end
+	end
+end
+
+function UI:_stepTabs(dt)
+	if not self.tabCircular or self.tabShown == self.tabTarget then
+		return
+	end
+	local td = self.state.tabDrag
+	if td and td.moved then
+		return -- the pointer is moving the bar directly
+	end
+	self.tabShown = self.A.stepCarousel(self.tabShown, self.tabTarget, dt)
+	self:_layoutTabs()
+end
+
+-- one tab further left (-1) or right (1)
+function UI:_scrollTabs(d)
+	if not self.tabCircular then
+		return
+	end
+	self.tabTarget = math.floor(self.tabTarget + 0.5) + d
+	if not self.state.minimized then
+		self:_startCountdown()
+	end
+end
+
+-- puts tab i in the middle slot, taking the shortest way round the ring
+function UI:_centerTab(i)
+	if not self.tabCircular then
+		return
+	end
+	local n = #self.tabButtons
+	local base = (i - 1) - math.floor(self.tabSlots / 2)
+	self.tabTarget = base + n * math.floor((self.tabTarget - base) / n + 0.5)
+end
+
+function UI:_onTabClick(i)
+	if os.clock() < (self._tabClickBlock or 0) then
+		return -- that press was a drag, not a click
+	end
+	self:_centerTab(i)
+	self:_selectTab(i)
+end
+
+function UI:_beginTabDrag(input)
+	if not isPress(input) or not self.tabCircular or self.state.minimized then
+		return
+	end
+	self._tabClickBlock = 0 -- a release that was missed must never leave tab clicks blocked
+	self.state.tabDrag = { input = input, x0 = pointerOf(input).X, off0 = self.tabShown, moved = false }
+end
+
+function UI:_dragTabs(td, input)
+	local dx = (pointerOf(input).X - td.x0) / self.scale.Scale
+	if not td.moved and math.abs(dx) > 6 then
+		td.moved = true
+		self._tabClickBlock = math.huge -- no tab click while the bar is being dragged
+	end
+	if td.moved then
+		local o = td.off0 - dx / self.tabStep
+		self.tabShown, self.tabTarget = o, o
+		self:_layoutTabs()
+	end
 end
 
 ---------------------------------------------------------------------
@@ -1337,6 +1640,8 @@ function UI:minimize()
 	s.shown = 1
 	self.barFill.Size = UDim2.fromScale(1, 1)
 	self:_applyStatus(false)
+	self.A.tween(self.scale, "ease", { Scale = self.userScale })
+	self.A.leadVisible(self.dot, self.leadText, not self.npActive) -- a song owns the pill: no dot, no "FMenu"
 
 	local size, leadPos = self:_pillSpec()
 	local t = self.A.collapse(self.refs, size, leadPos)
@@ -1358,6 +1663,8 @@ function UI:expand()
 	s.token += 1
 	self.body.Visible = true
 	self:_applyStatus(true)
+	self.A.tween(self.scale, "ease", { Scale = self.effScale })
+	self.A.leadVisible(self.dot, self.leadText, true)
 	self.A.expand(self.refs, self.expanded, LEAD_EXP)
 	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, 35) })
 	self:_npShow(false)
@@ -1398,10 +1705,11 @@ local function fmtTime(sec)
 	return ("%d:%02d"):format(sec // 60, sec % 60)
 end
 
--- pill size + where the status dot / title sit while minimized
+-- pill size + where the status dot / title sit while minimized. With a song the pill is only the player;
+-- the status dot and "FMenu" fade out (UI:_refreshPill), and it grows taller while the buttons are shown.
 function UI:_pillSpec()
 	if self.npActive then
-		return Vector2.new(NP_PILL.X + (self.npControls and NP_CTL_W or 0), NP_PILL.Y), NP_LEAD
+		return Vector2.new(NP_PILL.X, NP_PILL.Y + (self.npControls and NP_CTL_H or 0)), LEAD_MIN
 	end
 	return CFG.Pill, LEAD_MIN
 end
@@ -1429,6 +1737,7 @@ function UI:_refreshPill()
 	self.A.tween(self.root, "ease", { Size = UDim2.fromOffset(size.X, size.Y) })
 	self.A.tween(self.lead, "ease", { Position = leadPos })
 	self.A.tween(self.header, "ease", { Size = UDim2.new(1, 0, 0, self.npActive and size.Y - 6 or 35) })
+	self.A.leadVisible(self.dot, self.leadText, not self.npActive)
 	self:_npShow(self.npActive)
 end
 
@@ -1438,11 +1747,41 @@ local function npDefault(source)
 	return source or "lastfm"
 end
 
--- the play / skip buttons exist only when the owning source registered handlers (UI:setControls)
+-- the prev / play / next buttons exist only when the owning source registered handlers (UI:setControls)
 function UI:_updateControls()
 	local on = self.npActive and self.npHandlers[self.npSource] ~= nil
+	if on == self.npControls then
+		return
+	end
 	self.npControls = on
-	self.npCtl.Visible = on
+	if on then
+		self.npCtl.Visible = true
+	end
+	local t = self.A.tween(self.npCtl, "ease", { GroupTransparency = on and 0 or 1 })
+	if not on then
+		t.Completed:Once(function()
+			if not self.npControls then
+				self.npCtl.Visible = false
+			end
+		end)
+	end
+end
+
+-- the middle button shows pause while playing and play while paused; the icons swap with a little pop
+function UI:_setPlayGlyph(playing, animate)
+	if animate and self.npIsPlaying == playing then
+		return
+	end
+	self.npIsPlaying = playing
+	local show = playing and self.npPauseScale or self.npPlayScale
+	local hide = playing and self.npPlayScale or self.npPauseScale
+	if animate then
+		self.A.swap(hide, show)
+	else
+		show.Parent.Visible, hide.Parent.Visible = true, false
+		self.A.snap(show, { Scale = 1 })
+		self.A.snap(hide, { Scale = 0.01 })
+	end
 end
 
 -- info = { title, artist, showProgress? } or nil (that source has nothing playing). The cover comes later (setCover).
@@ -1458,14 +1797,17 @@ function UI:setNowPlaying(info, source)
 		local title = info.title or ""
 		self.npTitle.Text = title
 		self.npArtist.Text = info.artist or ""
+		self.A.textIn(self.npArtist, UDim2.fromOffset(54, 6))
+		self.A.textIn(self.npTitle, UDim2.fromOffset(54, 18))
 		self.npLetter.Text = (title:match(utf8.charpattern) or "?"):upper()
 		self.npLetter.Visible = true
 		self.npCover.Image = ""
 		local bars = info.showProgress ~= false
 		self.npBarBack.Visible, self.npTime.Visible = bars, bars
-		self.npBar.Size = UDim2.fromScale(0, 1)
+		self._npFrac = 0
+		self.A.snap(self.npBar, { Size = UDim2.fromScale(0, 1) })
 		self.npTime.Text = "0:00"
-		self.npPlay.Text = "||"
+		self:_setPlayGlyph(true, false)
 	else
 		if self.npSource ~= source then
 			return
@@ -1482,6 +1824,10 @@ function UI:setCover(asset, source)
 	end
 	self.npCover.Image = asset or ""
 	self.npLetter.Visible = asset == nil
+	if asset then
+		self.npCover.ImageTransparency = 1
+		self.A.tween(self.npCover, "ease", { ImageTransparency = 0 })
+	end
 end
 
 -- elapsed / duration in seconds (duration nil = unknown, only the time is shown)
@@ -1490,18 +1836,21 @@ function UI:setProgress(elapsed, duration, source)
 		return
 	end
 	if duration and duration > 0 then
-		self.npBar.Size = UDim2.fromScale(math.clamp(elapsed / duration, 0, 1), 1)
+		local f = math.clamp(elapsed / duration, 0, 1)
+		self.A.progress(self.npBar, f, math.abs(f - self._npFrac) > 0.08)
+		self._npFrac = f
 		self.npTime.Text = fmtTime(math.min(elapsed, duration)) .. " / " .. fmtTime(duration)
 	else
-		self.npBar.Size = UDim2.fromScale(0, 1)
+		self._npFrac = 0
+		self.A.progress(self.npBar, 0, true)
 		self.npTime.Text = fmtTime(elapsed)
 	end
 end
 
--- play / pause glyph of the middle button
+-- play / pause icon of the middle button
 function UI:setPlaying(playing, source)
 	if self.npSource == npDefault(source) then
-		self.npPlay.Text = playing and "||" or ">"
+		self:_setPlayGlyph(playing, true)
 	end
 end
 
@@ -1521,9 +1870,11 @@ function UI:_surface(inst, base)
 end
 
 function UI:setScale(scale)
-	self.scale.Scale = scale
+	self.userScale = scale
 	if self.built then
-		self:_applyHeight(true) -- the screen cap depends on the scale
+		self:_applyHeight(true) -- the auto-fit to the screen depends on the scale
+	else
+		self.scale.Scale = scale
 	end
 end
 
@@ -1563,20 +1914,45 @@ function UI:_bindInput()
 		end
 	end))
 
-	-- dragging a slider keeps following the pointer even when it leaves the popover; the wheel over a slider nudges it
+	-- dragging a slider keeps following the pointer even when it leaves the popover; the wheel over a slider nudges it,
+	-- over the tab bar it scrolls the tabs; dragging the tab bar scrolls it too
 	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if s.drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input == s.drag.input) then
+		local td = s.tabDrag
+		if td and (input.UserInputType == Enum.UserInputType.MouseMovement or input == td.input) then
+			self:_dragTabs(td, input)
+		elseif s.drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input == s.drag.input) then
 			self:_dragTo(s.drag.ctl, s.drag.input)
-		elseif input.UserInputType == Enum.UserInputType.MouseWheel and s.hover then
-			s.hover.nudge(input.Position.Z > 0 and 1 or -1)
+		elseif input.UserInputType == Enum.UserInputType.MouseWheel then
+			if s.hover then
+				s.hover.nudge(input.Position.Z > 0 and 1 or -1)
+			elseif self.tabCircular and not s.minimized and not s.popOpen
+				and isOver(self.tabBar, UserInputService:GetMouseLocation()) then
+				self:_scrollTabs(input.Position.Z > 0 and -1 or 1)
+			end
 		end
 	end))
 
 	table.insert(conns, UserInputService.InputEnded:Connect(function(input)
-		if isPress(input) and s.drag then
+		if not isPress(input) then
+			return
+		end
+		if s.drag then
 			self.A.knobGrow(s.drag.ctl.knob, false)
 			s.drag = nil
 		end
+		local td = s.tabDrag
+		if td then
+			s.tabDrag = nil
+			if td.moved then
+				self._tabClickBlock = os.clock() + 0.25 -- swallow the click that follows the release
+				self.tabTarget = math.floor(self.tabShown + 0.5) -- settle on a whole tab
+			end
+		end
+	end))
+
+	-- pressing between the tabs drags the bar as well
+	table.insert(conns, self.tabClip.InputBegan:Connect(function(input)
+		self:_beginTabDrag(input)
 	end))
 
 	table.insert(conns, self.popReset.MouseButton1Click:Connect(function()
@@ -1632,9 +2008,21 @@ end
 
 function UI:_step(dt)
 	local s = self.state
+
+	-- Re-fit when the screen size changes. This does not rely on AbsoluteSize's changed signal (it can stay silent
+	-- on a gui mounted through gethui / CoreGui), so the height can never stay stuck at a stale size.
+	local vp = self:_viewport()
+	if vp ~= self._vp then
+		self._vp = vp
+		if self.built then
+			self:_applyHeight(os.clock() > (self._settleUntil or 0)) -- snap while the game is still loading in
+		end
+	end
+
 	if s.minimized then
 		return
 	end
+	self:_stepTabs(dt)
 
 	local hovered = false
 	if UserInputService.MouseEnabled then
@@ -1671,6 +2059,9 @@ function UI:_step(dt)
 end
 
 function UI:start()
+	self._settleUntil = os.clock() + 2
+	self._vp = self:_viewport()
+	self:_applyHeight(false) -- sizes are re-measured now that the gui has been laid out
 	self:refreshStatus()
 	self:_applyStatus(true)
 	self:_startCountdown()
