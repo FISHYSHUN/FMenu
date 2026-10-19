@@ -16,6 +16,7 @@ local ESP = import("ESP")
 local Defense = import("Defense")
 local Troll = import("Troll")
 local Vehicle = import("Vehicle")
+local LastFm = import("LastFm")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1410,6 +1411,11 @@ end
 
 -- trolling (src/Troll.lua)
 for id, def in pairs(Troll.features) do
+	features[id] = def
+end
+
+-- Last.fm now playing on the pill (src/LastFm.lua)
+for id, def in pairs(LastFm.features) do
 	features[id] = def
 end
 
