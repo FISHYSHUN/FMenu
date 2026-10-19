@@ -30,6 +30,13 @@ if not okLastFm or type(LastFm) ~= "table" then
 	LastFm = { features = {} }
 end
 
+-- optional: if src/Audio.lua is missing or broken the menu still loads, just without the volume row
+local okAudio, Audio = pcall(import, "Audio")
+if not okAudio or type(Audio) ~= "table" then
+	warn("[FMenu] Audio module not loaded: " .. tostring(Audio))
+	Audio = { features = {} }
+end
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
@@ -1433,6 +1440,11 @@ end
 
 -- Spotify on the pill (src/Spotify.lua)
 for id, def in pairs(Spotify.features) do
+	features[id] = def
+end
+
+-- audio volume slider (src/Audio.lua)
+for id, def in pairs(Audio.features) do
 	features[id] = def
 end
 
