@@ -38,6 +38,9 @@ local function import(name)
 		error(("[FMenu] %s failed to compile: %s"):format(name, tostring(err)), 0)
 	end
 	local mod = fn(import)
+	if mod == nil then
+		error(("[FMenu] %s returned nothing: is src/%s.lua uploaded completely (it must end with 'return')?"):format(name, name), 0)
+	end
 	cache[name] = mod
 	return mod
 end
