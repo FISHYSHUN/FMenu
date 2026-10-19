@@ -318,6 +318,10 @@ features.spotify = {
 			if changed and state.id then
 				clearPill(ctx)
 			end
+			local haveRefresh = trim(o.clientId) ~= "" and trim(o.clientSecret) ~= "" and trim(o.refresh) ~= ""
+			if not haveRefresh and trim(o.token) == "" then
+				ctx.notify("spotify: right-click this row and fill in Client ID, secret and refresh token (see tools/spotify_auth.py)", YELLOW)
+			end
 		end
 		if on then
 			setControls(ctx, o.controls ~= false)
