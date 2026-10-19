@@ -39,6 +39,7 @@ Games.index = {
 	-- check it with print(game.GameId) if the tab still does not show up)
 	rivals = { module = "games/Rivals", places = { 17625359962 }, universes = { 6035872082 }, names = { "rivals" } },
 	nds = { module = "games/NaturalDisasters", places = { 189707 }, names = { "natural disaster" } },
+	flee = { module = "games/FleeTheFacility", places = { 893973440, 17600423422 }, names = { "flee" } },
 }
 
 -- { header = "Title" } starts a titled section inside a tab (rows after it sit in their own 2 column grid)
