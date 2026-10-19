@@ -127,11 +127,30 @@ end
 ui:start()
 cfg.ready = true -- from here on changes are autosaved
 
+-- hold-key quick menu for the current game (src/QuickMenu.lua). Optional: if it fails to load the menu still works.
+local quick
+do
+	local okMod, QuickMenu = pcall(import, "QuickMenu")
+	if okMod then
+		local okNew, obj = pcall(QuickMenu.new, { ui = ui, animations = Animations, profile = profile })
+		if okNew then
+			quick = obj
+		else
+			warn("[FMenu] quick menu failed to start: " .. tostring(obj))
+		end
+	else
+		warn("[FMenu] quick menu not loaded: " .. tostring(QuickMenu))
+	end
+end
+
 genv.FMenu = {
 	profile = profile.name,
 	destroy = function()
 		if cfg.autosave then
 			cfg:save()
+		end
+		if quick then
+			pcall(quick.destroy, quick)
 		end
 		Functionality.destroy()
 		ui:destroy()
