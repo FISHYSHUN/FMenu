@@ -1,48 +1,34 @@
 -- ModuleScript: ServerShare
--- Type /share in chat and the current server is posted to your Discord webhook: game name, game link and a join
--- link for this exact server (JobId). Nothing about other players is sent, only how many are in the server.
+-- Posts the server you just joined to a Discord webhook, once per server, a few seconds after the menu starts:
+-- game name, game link, player count and a join snippet for this exact server (JobId).
+-- Nothing about other players is sent, only how many are in the server.
 --
--- Where the webhook lives (never put it in the repo, anyone who can read the repo could spam or delete it):
---   * getgenv().FMENU_WEBHOOK = "https://discord.com/api/webhooks/..." before running the loader, or
---   * a file FMenu/webhook.txt in the executor's workspace folder containing only the url
---
--- /share is a TextChatCommand on the new chat (not sent to the server, nobody sees it). On old chat it falls back
--- to Player.Chatted, where the line is visible.
+-- The webhook is hardcoded below, so this file must only ever live in a PRIVATE repo. Anyone who can read it can
+-- spam or delete the webhook, and anyone you give access to the repo runs a copy that reports to your channel.
+-- Every post shows a toast so whoever runs it can see it happened.
+-- Turn it off for one run with getgenv().FMENU_NO_REPORT = true before the loader, or override the target with
+-- getgenv().FMENU_WEBHOOK = "https://discord.com/api/webhooks/...".
 --
 --   ServerShare.new({ notify = Functionality.notify }) -> object with :send() :destroy()
 
 local import = ...
 
 local Players = game:GetService("Players")
-local TextChatService = game:GetService("TextChatService")
 local MarketplaceService = game:GetService("MarketplaceService")
 local HttpService = game:GetService("HttpService")
 
-local lp = Players.LocalPlayer
+local WEBHOOK = "https://discord.com/api/webhooks/1561883679645634690/yGFr2oO77V78OnPlfH_ykATUjS0NHcD4AR8mNkT3IrArCmycKMn5kdXKzPm2yvzE71LD"
+local DELAY = 3 -- seconds after start, so the menu's toasts exist
 
 local ServerShare = {}
 ServerShare.__index = ServerShare
-ServerShare.COMMAND = "/share"
 
 local RED = Color3.fromRGB(255, 84, 96)
 local GREEN = Color3.fromRGB(72, 214, 134)
-local YELLOW = Color3.fromRGB(255, 214, 64)
 
-local function trim(s)
-	return type(s) == "string" and s:match("^%s*(.-)%s*$") or ""
-end
-
-local function webhookUrl()
+local function target()
 	local g = (getgenv and getgenv()) or _G
-	local url = trim(g.FMENU_WEBHOOK)
-	if url == "" and type(isfile) == "function" and type(readfile) == "function" then
-		local ok, text = pcall(function()
-			if isfile("FMenu/webhook.txt") then
-				return readfile("FMenu/webhook.txt")
-			end
-		end)
-		url = ok and trim(text) or ""
-	end
+	local url = type(g.FMENU_WEBHOOK) == "string" and g.FMENU_WEBHOOK or WEBHOOK
 	if url:match("^https://discord%.com/api/webhooks/") or url:match("^https://discordapp%.com/api/webhooks/") then
 		return url
 	end
@@ -52,34 +38,32 @@ end
 function ServerShare.new(deps)
 	local self = setmetatable({}, ServerShare)
 	self.notify = deps.notify or function() end
-	self._conns = {}
-	self.busy = false
-	self:_hookChat()
+	self.alive = true
+	local g = (getgenv and getgenv()) or _G
+	if not g.FMENU_NO_REPORT then
+		task.delay(DELAY, function()
+			-- once per server: re-running the loader in the same server does not post again
+			if self.alive and g.FMENU_REPORTED ~= game.JobId then
+				g.FMENU_REPORTED = game.JobId
+				self:send()
+			end
+		end)
+	end
 	return self
 end
 
 function ServerShare:send()
-	if self.busy then
-		return
-	end
-	local url = webhookUrl()
-	if not url then
-		self.notify("share: put your webhook in FMenu/webhook.txt or getgenv().FMENU_WEBHOOK", YELLOW)
-		return
-	end
+	local url = target()
 	local fn = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
-	if not fn then
-		self.notify("share: your executor has no request() function", RED)
+	if not url or not fn then
 		return
 	end
-	self.busy = true
 	task.spawn(function()
 		local placeId, jobId = game.PlaceId, game.JobId
 		local name = "Roblox server"
 		pcall(function()
 			name = MarketplaceService:GetProductInfo(placeId).Name
 		end)
-		local count = #Players:GetPlayers()
 		local body = HttpService:JSONEncode({
 			username = "FMenu",
 			embeds = { {
@@ -87,7 +71,7 @@ function ServerShare:send()
 				url = ("https://www.roblox.com/games/%d"):format(placeId),
 				color = 0x8B7DFF,
 				fields = {
-					{ name = "Players", value = ("%d / %d"):format(count, Players.MaxPlayers), inline = true },
+					{ name = "Players", value = ("%d / %d"):format(#Players:GetPlayers(), Players.MaxPlayers), inline = true },
 					{ name = "Place id", value = tostring(placeId), inline = true },
 					{
 						name = "Join this server (run in the executor)",
@@ -102,51 +86,17 @@ function ServerShare:send()
 			Headers = { ["Content-Type"] = "application/json" },
 			Body = body,
 		})
-		self.busy = false
 		local code = ok and type(res) == "table" and res.StatusCode or nil
 		if code and code >= 200 and code < 300 then
-			self.notify("share: server posted", GREEN)
+			self.notify("server reported to webhook", GREEN)
 		else
-			self.notify("share: failed" .. (code and (" (" .. code .. ")") or ""), RED)
+			self.notify("webhook failed" .. (code and (" (" .. code .. ")") or ""), RED)
 		end
 	end)
 end
 
-function ServerShare:_hookChat()
-	local hooked = false
-	if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-		local ok, cmd = pcall(function()
-			local c = Instance.new("TextChatCommand")
-			c.Name = "FMenuShare"
-			c.PrimaryAlias = ServerShare.COMMAND
-			c.Parent = TextChatService
-			return c
-		end)
-		if ok and cmd then
-			self.cmd = cmd
-			table.insert(self._conns, cmd.Triggered:Connect(function()
-				self:send()
-			end))
-			hooked = true
-		end
-	end
-	if not hooked then
-		table.insert(self._conns, lp.Chatted:Connect(function(msg)
-			if msg:lower():match("^%s*" .. ServerShare.COMMAND:gsub("%p", "%%%0") .. "%s*$") then
-				self:send()
-			end
-		end))
-	end
-end
-
 function ServerShare:destroy()
-	for _, c in ipairs(self._conns) do
-		c:Disconnect()
-	end
-	table.clear(self._conns)
-	if self.cmd then
-		pcall(self.cmd.Destroy, self.cmd)
-	end
+	self.alive = false
 end
 
 return ServerShare
