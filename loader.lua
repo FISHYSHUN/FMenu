@@ -130,6 +130,7 @@ cfg.ready = true -- from here on changes are autosaved
 -- optional extras: if one fails to load or start the menu still works.
 --   QuickMenu    hold Tab for the current game's cheats (src/QuickMenu.lua)
 --   PlayerPanel  /isee in chat opens a player list with TP / Watch / Orbit / Mark (src/PlayerPanel.lua)
+--   ServerShare  /share in chat posts this server to your Discord webhook (src/ServerShare.lua)
 local extras = {}
 local function loadExtra(name, args)
 	local okMod, Mod = pcall(import, name)
@@ -146,6 +147,7 @@ local function loadExtra(name, args)
 end
 loadExtra("QuickMenu", { ui = ui, animations = Animations, profile = profile })
 loadExtra("PlayerPanel", { animations = Animations, notify = Functionality.notify })
+loadExtra("ServerShare", { notify = Functionality.notify })
 
 genv.FMenu = {
 	profile = profile.name,
