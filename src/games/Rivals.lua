@@ -165,9 +165,10 @@ local Rivals = {
 		{ id = "rvTeam", label = "Team check", slider = "Unused", value = 0, on = true },
 		{ header = "Visuals" },
 		{ id = "rvWire", label = "Wireframe viewmodel", slider = "Unused", value = 0, on = false, opts = {
-			{ type = "slider", key = "thickness", label = "Line thickness", min = 0.005, max = 0.05, step = 0.005, unit = " st", default = 0.02 },
 			{ type = "slider", key = "alpha", label = "Opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 1 },
 			{ type = "hue", key = "hue", label = "Hue", default = 0.55 },
+			{ type = "toggle", key = "mesh", label = "Real mesh edges", default = true },
+			{ type = "toggle", key = "onTop", label = "Show through walls", default = false },
 		} },
 	} },
 	features = {},
@@ -442,13 +443,20 @@ do
 	}
 end
 
--- wireframe viewmodel: every part of the gun / arms models under the camera is hidden and gets a
--- SelectionBox, which draws that part's edges. Edges are per part (box outline), not per triangle:
--- Roblox has no mesh wireframe without EditableMesh. Originals are restored when turned off.
+-- wireframe viewmodel: the gun / arms parts are hidden and drawn as lines instead (WireframeHandleAdornment).
+--   Real mesh edges: tries AssetService:CreateEditableMeshAsync on every MeshPart and draws its triangle
+--   edges. Executors that block that (or meshes it cannot read) fall back to the 12 edges of the part's box.
+--   Where the viewmodel lives is a guess: any model without a Humanoid under the camera, plus workspace
+--   models whose name contains one of VM_NAMES. First run prints what it looked at if it finds nothing.
 do
-	local enabled, cfg, acc = false, {}, 0
+	local AssetService = game:GetService("AssetService")
+	local VM_NAMES = { "viewmodel", "view_model", "arms" } -- FILL: the real viewmodel name once you dump it
+	local MAX_TRIS = 1200 -- per mesh, triangles are skipped evenly past this
+
+	local enabled, cfg, acc, busy, reported = false, {}, 0, false, false
 	local orig = setmetatable({}, { __mode = "k" }) -- part -> original Transparency
-	local boxes = {} -- part -> SelectionBox
+	local wires = {} -- part -> adornment
+	local meshData = {} -- MeshId -> list of { v1, v2, v3 } or false
 	local folder
 
 	local function getFolder()
@@ -466,9 +474,9 @@ do
 	end
 
 	local function clear()
-		for part, box in pairs(boxes) do
-			box:Destroy()
-			boxes[part] = nil
+		for part, w in pairs(wires) do
+			w:Destroy()
+			wires[part] = nil
 		end
 		for part, t in pairs(orig) do
 			if part.Parent then
@@ -478,41 +486,135 @@ do
 		table.clear(orig)
 	end
 
-	local function apply()
-		local cam = workspace.CurrentCamera
-		if not cam then
-			return
+	local function roots()
+		local list = {}
+		local function consider(m)
+			if m:IsA("Model") and not m:FindFirstChildOfClass("Humanoid") and not Players:GetPlayerFromCharacter(m) then
+				list[#list + 1] = m
+			end
 		end
-		for part, box in pairs(boxes) do
-			if not part:IsDescendantOf(cam) then -- weapon swapped, old model is gone
-				box:Destroy()
-				boxes[part] = nil
+		local cam = workspace.CurrentCamera
+		if cam then
+			for _, c in ipairs(cam:GetChildren()) do
+				consider(c)
+			end
+		end
+		for _, c in ipairs(workspace:GetChildren()) do
+			local n = c.Name:lower()
+			for _, key in ipairs(VM_NAMES) do
+				if n:find(key, 1, true) then
+					consider(c)
+					break
+				end
+			end
+		end
+		return list
+	end
+
+	local function meshTris(part)
+		local id = part.MeshId
+		if meshData[id] ~= nil then
+			return meshData[id] or nil
+		end
+		local ok, em = pcall(function()
+			return AssetService:CreateEditableMeshAsync(Content.fromUri(id))
+		end)
+		if not ok or not em then
+			meshData[id] = false
+			return nil
+		end
+		local tris = {}
+		local ok2 = pcall(function()
+			local all = em:GetTriangles()
+			local stride = math.max(1, math.ceil(#all / MAX_TRIS))
+			for i = 1, #all, stride do
+				local a, b, c = em:GetTriangleVertices(all[i])
+				tris[#tris + 1] = { em:GetPosition(a), em:GetPosition(b), em:GetPosition(c) }
+			end
+		end)
+		pcall(em.Destroy, em)
+		meshData[id] = (ok2 and #tris > 0) and tris or false
+		return meshData[id] or nil
+	end
+
+	local function drawBox(w, size)
+		local h = size / 2
+		local function c(x, y, z)
+			return Vector3.new(x * h.X, y * h.Y, z * h.Z)
+		end
+		w:AddPath({ c(-1, -1, -1), c(1, -1, -1), c(1, -1, 1), c(-1, -1, 1) }, true)
+		w:AddPath({ c(-1, 1, -1), c(1, 1, -1), c(1, 1, 1), c(-1, 1, 1) }, true)
+		w:AddLine(c(-1, -1, -1), c(-1, 1, -1))
+		w:AddLine(c(1, -1, -1), c(1, 1, -1))
+		w:AddLine(c(1, -1, 1), c(1, 1, 1))
+		w:AddLine(c(-1, -1, 1), c(-1, 1, 1))
+	end
+
+	local function build(part)
+		local w = Instance.new("WireframeHandleAdornment")
+		w.Adornee = part
+		w.Parent = getFolder()
+		local drew = false
+		if cfg.mesh ~= false and part:IsA("MeshPart") and part.MeshId ~= "" then
+			local tris = meshTris(part)
+			local ms = part.MeshSize
+			if tris and ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
+				local k = part.Size / ms
+				for _, t in ipairs(tris) do
+					w:AddPath({ t[1] * k, t[2] * k, t[3] * k }, true)
+				end
+				drew = true
+			end
+		end
+		if not drew then
+			drawBox(w, part.Size)
+		end
+		return w
+	end
+
+	local function scan(ctx)
+		for part, w in pairs(wires) do
+			if not part:IsDescendantOf(workspace) then
+				w:Destroy()
+				wires[part] = nil
 				orig[part] = nil
 			end
 		end
-		local color = Color3.fromHSV(cfg.hue or 0.55, 0.85, 1)
-		for _, model in ipairs(cam:GetChildren()) do
-			-- FILL: if it also catches models that are not your gun / arms, narrow this to the viewmodel's real name
-			if model:IsA("Model") and not model:FindFirstChildOfClass("Humanoid") then
-				for _, d in ipairs(model:GetDescendants()) do
-					if d:IsA("BasePart") then
-						local box = boxes[d]
-						if not box and d.Transparency < 0.99 then -- skip parts that were already invisible
-							orig[d] = d.Transparency
-							box = Instance.new("SelectionBox")
-							box.Adornee = d
-							box.SurfaceTransparency = 1
-							box.Parent = getFolder()
-							boxes[d] = box
-						end
-						if box then
-							box.Color3 = color
-							box.LineThickness = cfg.thickness or 0.02
-							box.Transparency = 1 - (cfg.alpha or 1)
-							d.Transparency = 1
-						end
-					end
+		local list = roots()
+		for _, model in ipairs(list) do
+			for _, d in ipairs(model:GetDescendants()) do
+				if d:IsA("BasePart") and not wires[d] and d.Transparency < 0.99 then
+					orig[d] = d.Transparency
+					wires[d] = build(d)
 				end
+			end
+		end
+		if not enabled then
+			return
+		end
+		local color = Color3.fromHSV(cfg.hue or 0.55, 0.85, 1)
+		for _, w in pairs(wires) do
+			w.Color3 = color
+			w.Transparency = 1 - (cfg.alpha or 1)
+			w.AlwaysOnTop = cfg.onTop == true
+		end
+		if not reported then
+			reported = true
+			if next(wires) then
+				local n = 0
+				for _ in pairs(wires) do
+					n += 1
+				end
+				ctx.notify(("wireframe: %d parts"):format(n), Color3.fromRGB(72, 214, 134))
+			else
+				local names = {}
+				local cam = workspace.CurrentCamera
+				for _, c in ipairs(cam and cam:GetChildren() or {}) do
+					names[#names + 1] = c.Name .. "(" .. c.ClassName .. ")"
+				end
+				print("[FMenu] wireframe: no viewmodel found. camera children: " .. table.concat(names, ", "))
+				ctx.notify("wireframe: no viewmodel found, hold a weapon (see console)", Color3.fromRGB(255, 214, 64))
+				reported = false -- try again next scan
 			end
 		end
 	end
@@ -521,18 +623,29 @@ do
 		set = function(on, _v, _c, o)
 			enabled, cfg = on, o
 			acc = 1
+			reported = false
 			if not on then
 				clear()
 			end
 		end,
-		step = function(dt)
+		step = function(dt, ctx)
 			if not enabled then
 				return
 			end
+			-- the game may reset transparency, so keep the real parts hidden every frame
+			for part in pairs(wires) do
+				if part.Transparency ~= 1 then
+					part.Transparency = 1
+				end
+			end
 			acc += dt
-			if acc >= 0.1 then -- viewmodels get rebuilt on weapon swap, and the game may reset transparency
+			if acc >= 0.5 and not busy then -- picks up weapon swaps (CreateEditableMeshAsync can yield, hence the thread)
 				acc = 0
-				apply()
+				busy = true
+				task.spawn(function()
+					pcall(scan, ctx)
+					busy = false
+				end)
 			end
 		end,
 		destroy = function()
