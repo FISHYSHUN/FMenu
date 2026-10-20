@@ -16,6 +16,7 @@ local ESP = import("ESP")
 local Defense = import("Defense")
 local Troll = import("Troll")
 local Vehicle = import("Vehicle")
+local Movement = import("Movement")
 -- optional like Last.fm: a missing src/Spotify.lua only disables the Spotify row
 local okSpotify, Spotify = pcall(import, "Spotify")
 if not okSpotify or type(Spotify) ~= "table" then
@@ -1450,6 +1451,10 @@ end
 
 -- vehicle controller (src/Vehicle.lua)
 for id, def in pairs(Vehicle.features) do
+	features[id] = def
+end
+-- parkour: sprint, wall run, wall jump, ledge hang (src/Movement.lua)
+for id, def in pairs(Movement.features) do
 	features[id] = def
 end
 
