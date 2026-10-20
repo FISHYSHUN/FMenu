@@ -248,4 +248,339 @@ function Games.resolve(placeId, gameName)
 	}
 end
 
+---------------------------------------------------------------------
+-- chat commands (no window): /tp /watch /orbit /mark /server
+---------------------------------------------------------------------
+-- Games.commands({ notify = Functionality.notify }) -> object with :destroy(), called once from loader.lua.
+--   /tp <name>       teleport next to that player
+--   /watch <name>    camera follows them (again, or /watch alone, to go back to yourself)
+--   /orbit <name>    circle around them (again, or /orbit alone, to stop)
+--   /mark <name>     yellow chams + name tag + distance, any number of players (/mark alone clears all)
+--   /server [note]   posts the server you are in to your Discord webhook, like a bookmark
+-- <name> is a partial match on username or display name.
+--
+-- Client side only: moves your own character / camera and draws markers, nothing is sent to anyone, except /server,
+-- which posts game name + link, player count and a join snippet for this exact server (JobId) when you type it.
+-- The webhook is not in the code: put the URL in FMenu/webhook.txt (one line) or set getgenv().FMENU_WEBHOOK.
+--
+-- With the new chat (TextChatService) the commands are TextChatCommands: they run locally and the text is NOT sent,
+-- nobody sees it. With the old chat only Player.Chatted exists, which fires after sending, so the line is visible
+-- there. Games.SERVER_KEY = Enum.KeyCode.<x> also sends /server with a key (nil = chat command only).
+
+Games.SERVER_KEY = nil
+Games.ORBIT_RADIUS, Games.ORBIT_SPEED, Games.ORBIT_HEIGHT = 10, 2, 2
+
+function Games.commands(deps)
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local UserInputService = game:GetService("UserInputService")
+	local TextChatService = game:GetService("TextChatService")
+	local HttpService = game:GetService("HttpService")
+	local MarketplaceService = game:GetService("MarketplaceService")
+
+	local notify = deps.notify or function() end
+	local lp = Players.LocalPlayer
+	local YELLOW = Color3.fromRGB(255, 214, 64)
+	local RED = Color3.fromRGB(255, 84, 96)
+	local GREEN = Color3.fromRGB(72, 214, 134)
+
+	local conns, cmds = {}, {}
+	local watch, orbit, angle = nil, nil, 0
+	local marked = {}
+	local posting = false
+
+	local function trim(s)
+		return type(s) == "string" and s:match("^%s*(.-)%s*$") or ""
+	end
+
+	local function usable(plr)
+		return plr ~= nil and plr.Parent ~= nil and Util.isAlive(plr.Character) and Util.rootOf(plr.Character) ~= nil
+	end
+
+	local function findPlayer(query)
+		query = query:lower()
+		if query == "" then
+			return nil
+		end
+		local prefix, partial
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= lp then
+				local n, d = plr.Name:lower(), plr.DisplayName:lower()
+				if n == query or d == query then
+					return plr
+				end
+				if not prefix and (n:sub(1, #query) == query or d:sub(1, #query) == query) then
+					prefix = plr
+				end
+				if not partial and (n:find(query, 1, true) or d:find(query, 1, true)) then
+					partial = plr
+				end
+			end
+		end
+		return prefix or partial
+	end
+
+	local function resolveTarget(arg)
+		local plr = findPlayer(arg)
+		if not plr then
+			notify(("no player matches '%s'"):format(arg), YELLOW)
+		end
+		return plr
+	end
+
+	local function restoreCamera()
+		local cam, hum = workspace.CurrentCamera, Util.humanoid()
+		if cam and hum then
+			cam.CameraSubject = hum
+		end
+	end
+
+	local esp = ESP.new({
+		maxDistance = 5000,
+		resolve = function(plr, char, dist, style)
+			if marked[plr] then
+				return YELLOW, ESP.text(plr, char, dist, "[MARK]", style)
+			end
+			return nil
+		end,
+	})
+
+	-- actions ----------------------------------------------------------
+	local function doTp(arg)
+		local plr = resolveTarget(arg)
+		if not plr then
+			return
+		end
+		local root, troot = Util.root(), usable(plr) and Util.rootOf(plr.Character)
+		if not (root and troot) then
+			notify(plr.DisplayName .. " is not available", YELLOW)
+			return
+		end
+		root.CFrame = troot.CFrame * CFrame.new(0, 0, 4)
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	local function doWatch(arg)
+		if arg == "" then
+			if watch then
+				watch = nil
+				restoreCamera()
+			end
+			return
+		end
+		local plr = resolveTarget(arg)
+		if not plr then
+			return
+		end
+		if watch == plr then
+			watch = nil
+			restoreCamera()
+		else
+			watch = plr
+		end
+	end
+
+	local function doOrbit(arg)
+		if arg == "" then
+			orbit = nil
+			return
+		end
+		local plr = resolveTarget(arg)
+		if plr then
+			orbit = (orbit ~= plr) and plr or nil
+		end
+	end
+
+	local function doMark(arg)
+		if arg == "" then
+			table.clear(marked)
+		else
+			local plr = resolveTarget(arg)
+			if not plr then
+				return
+			end
+			marked[plr] = (not marked[plr]) or nil
+		end
+		esp:setEnabled(next(marked) ~= nil)
+	end
+
+	local function doServer(note)
+		if posting then
+			return
+		end
+		local g = (getgenv and getgenv()) or _G
+		local url = trim(g.FMENU_WEBHOOK)
+		if url == "" and type(isfile) == "function" and type(readfile) == "function" and isfile("FMenu/webhook.txt") then
+			local ok, text = pcall(readfile, "FMenu/webhook.txt")
+			url = ok and trim(text) or ""
+		end
+		if not (url:match("^https://discord%.com/api/webhooks/") or url:match("^https://discordapp%.com/api/webhooks/")) then
+			notify("server: put your webhook URL in FMenu/webhook.txt (or getgenv().FMENU_WEBHOOK)", YELLOW)
+			return
+		end
+		local fn = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
+		if not fn then
+			notify("server: your executor has no request() function", RED)
+			return
+		end
+		posting = true
+		task.spawn(function()
+			local placeId, jobId = game.PlaceId, game.JobId
+			local name = "Roblox server"
+			pcall(function()
+				name = MarketplaceService:GetProductInfo(placeId).Name
+			end)
+			local fields = {
+				{ name = "Players", value = ("%d / %d"):format(#Players:GetPlayers(), Players.MaxPlayers), inline = true },
+				{ name = "Place id", value = tostring(placeId), inline = true },
+			}
+			if note and note ~= "" then
+				fields[#fields + 1] = { name = "Note", value = note:sub(1, 200) }
+			end
+			fields[#fields + 1] = {
+				name = "Join this server (run in the executor)",
+				value = ("```lua\ngame:GetService(\"TeleportService\"):TeleportToPlaceInstance(%d, \"%s\")\n```"):format(placeId, jobId),
+			}
+			local body = HttpService:JSONEncode({
+				username = "FMenu",
+				embeds = { {
+					title = name,
+					url = ("https://www.roblox.com/games/%d"):format(placeId),
+					color = 0x8B7DFF,
+					fields = fields,
+				} },
+			})
+			local ok, res = pcall(fn, {
+				Url = url,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body = body,
+			})
+			local code = ok and type(res) == "table" and res.StatusCode or nil
+			if code and code >= 200 and code < 300 then
+				notify("server bookmarked", GREEN)
+			else
+				notify("webhook failed" .. (code and (" (" .. code .. ")") or ""), RED)
+			end
+			posting = false
+		end)
+	end
+
+	-- every frame: keeps watch / orbit going, drops targets that left or died --
+	table.insert(conns, RunService.Heartbeat:Connect(function(dt)
+		if watch then
+			if usable(watch) then
+				local cam, hum = workspace.CurrentCamera, Util.humanoid(watch.Character)
+				if cam and hum and cam.CameraSubject ~= hum then
+					cam.CameraSubject = hum
+				end
+			else
+				watch = nil
+				restoreCamera()
+			end
+		end
+		if orbit then
+			if usable(orbit) then
+				local root, troot = Util.root(), Util.rootOf(orbit.Character)
+				if root and troot then
+					angle += Games.ORBIT_SPEED * dt
+					local pos = troot.Position + Vector3.new(
+						math.cos(angle) * Games.ORBIT_RADIUS,
+						Games.ORBIT_HEIGHT,
+						math.sin(angle) * Games.ORBIT_RADIUS
+					)
+					root.CFrame = CFrame.lookAt(pos, Vector3.new(troot.Position.X, pos.Y, troot.Position.Z))
+					root.AssemblyLinearVelocity = Vector3.zero
+				end
+			else
+				orbit = nil
+			end
+		end
+		for plr in pairs(marked) do
+			if plr.Parent == nil then
+				marked[plr] = nil
+			end
+		end
+		esp:step(dt)
+	end))
+
+	table.insert(conns, Players.PlayerRemoving:Connect(function(plr)
+		if watch == plr then
+			watch = nil
+			restoreCamera()
+		end
+		if orbit == plr then
+			orbit = nil
+		end
+		marked[plr] = nil
+	end))
+
+	if Games.SERVER_KEY then
+		table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
+			if not processed and input.KeyCode == Games.SERVER_KEY then
+				doServer("")
+			end
+		end))
+	end
+
+	-- chat hooks -------------------------------------------------------
+	local commands = {
+		{ name = "FMenuTp", alias = "/tp", run = doTp },
+		{ name = "FMenuWatch", alias = "/watch", run = doWatch },
+		{ name = "FMenuOrbit", alias = "/orbit", run = doOrbit },
+		{ name = "FMenuMark", alias = "/mark", run = doMark },
+		{ name = "FMenuServer", alias = "/server", run = doServer },
+	}
+	-- text after the command: "/server good lobby" -> "good lobby"
+	local function argsOf(text)
+		return trim((tostring(text or ""):gsub("^%s*%S+", "", 1)))
+	end
+	local newChat = TextChatService.ChatVersion == Enum.ChatVersion.TextChatService
+	for _, def in ipairs(commands) do
+		local hooked = false
+		if newChat then
+			local ok, cmd = pcall(function()
+				local c = Instance.new("TextChatCommand")
+				c.Name = def.name
+				c.PrimaryAlias = def.alias
+				c.Parent = TextChatService
+				return c
+			end)
+			if ok and cmd then
+				table.insert(cmds, cmd)
+				table.insert(conns, cmd.Triggered:Connect(function(_source, text)
+					def.run(argsOf(text))
+				end))
+				hooked = true
+			end
+		end
+		if not hooked then
+			table.insert(conns, lp.Chatted:Connect(function(msg)
+				local line = trim(msg):lower()
+				if line == def.alias or line:sub(1, #def.alias + 1) == def.alias .. " " then
+					def.run(argsOf(msg))
+				end
+			end))
+		end
+	end
+
+	return {
+		destroy = function()
+			for _, c in ipairs(conns) do
+				c:Disconnect()
+			end
+			table.clear(conns)
+			if watch then
+				restoreCamera()
+			end
+			watch, orbit = nil, nil
+			table.clear(marked)
+			esp:setEnabled(false)
+			for _, cmd in ipairs(cmds) do
+				pcall(cmd.Destroy, cmd)
+			end
+		end,
+	}
+end
+
 return Games
