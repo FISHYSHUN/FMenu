@@ -29,6 +29,7 @@ local Util = import("Util")
 local ESP = import("ESP")
 local Troll = import("Troll")
 local Vehicle = import("Vehicle")
+local Movement = import("Movement")
 local range = Util.range
 
 local Games = {}
@@ -118,6 +119,7 @@ local baseTabs = {
 		{ id = "maxzoom", label = "Max zoom out", slider = "Distance", value = 30, on = false, fmt = range(20, 1000, " st") },
 	} },
 	Vehicle.tab,
+	Movement.tab,
 	Troll.tab,
 	-- protection from other players' cheats. Everything here is client side: it changes what YOUR game does
 	-- about other players (collisions, your own velocity, warnings), it cannot kick or ban anyone.
