@@ -59,7 +59,7 @@ Flee.tab = { name = "Flee", rows = {
 	} },
 	{ header = "Map icons" },
 	{ id = "fleeComp", label = "Computer icons", slider = "Max distance", value = 100, on = false, fmt = range(100, 3000, " st"),
-		opts = iconOpts({ { type = "toggle", key = "hideDone", label = "Hide hacked computers", default = false } }) },
+		opts = iconOpts({ { type = "toggle", key = "hideDone", label = "Hide hacked computers", default = true } }) },
 	{ id = "fleePod", label = "Pod icons", slider = "Max distance", value = 100, on = false, fmt = range(100, 3000, " st"), opts = iconOpts() },
 	{ id = "fleeExit", label = "Exit icons", slider = "Max distance", value = 100, on = false, fmt = range(100, 3000, " st"), opts = iconOpts() },
 } }
