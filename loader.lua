@@ -88,11 +88,20 @@ if queueTp and not genv.FMENU_NO_REQUEUE then
 	local loaderUrl = genv.FMENU_LOADER or "https://raw.githubusercontent.com/FISHYSHUN/FMenu/main/loader.lua"
 	local lines = {
 		"local g = (getgenv and getgenv()) or _G",
+		-- Config > Carry to next game: when it is off the queued copy stops here
+		'if type(isfile) == "function" and type(readfile) == "function" and isfile("FMenu/carry.txt") and readfile("FMenu/carry.txt"):match("off") then return end',
 		"if g.FMENU_BOOTED == game.JobId then return end",
 		"g.FMENU_BOOTED = game.JobId",
 	}
 	if genv.FMENU_BASE then
 		lines[#lines + 1] = ("g.FMENU_BASE = %q"):format(genv.FMENU_BASE)
+	end
+	-- settings that were set before the loader ran travel with it
+	if type(genv.FMENU_WEBHOOK) == "string" then
+		lines[#lines + 1] = ("g.FMENU_WEBHOOK = %q"):format(genv.FMENU_WEBHOOK)
+	end
+	if type(genv.FMENU_LASTFM) == "table" then
+		lines[#lines + 1] = ("g.FMENU_LASTFM = { user = %q, key = %q }"):format(tostring(genv.FMENU_LASTFM.user or ""), tostring(genv.FMENU_LASTFM.key or ""))
 	end
 	-- the queued copy reads the token from the file again (it never contains the token itself)
 	lines[#lines + 1] = ("local url = %q"):format(loaderUrl)
@@ -126,6 +135,21 @@ Functionality.init({ ui = ui, animations = Animations, profileName = profile.nam
 for id, def in pairs(profile.features) do
 	Functionality.register(id, def)
 end
+
+-- "Carry to next game" row: the queued copy above checks FMenu/carry.txt before it runs
+Functionality.register("carry", {
+	set = function(on)
+		if type(writefile) ~= "function" then
+			return
+		end
+		pcall(function()
+			if makefolder and isfolder and not isfolder("FMenu") then
+				makefolder("FMenu")
+			end
+			writefile("FMenu/carry.txt", on and "on" or "off")
+		end)
+	end,
+})
 
 -- what gets written: every switch row (value + right-click options) and where the HUD labels were dragged to
 cfg.collect = function()
