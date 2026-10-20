@@ -165,10 +165,26 @@ local Rivals = {
 		{ id = "rvTeam", label = "Team check", slider = "Unused", value = 0, on = true },
 		{ header = "Visuals" },
 		{ id = "rvWire", label = "Wireframe viewmodel", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "choice", key = "parts", label = "Draw", choices = { "All", "Weapon only", "Hands only" }, default = "All" },
+			{ type = "slider", key = "thickness", label = "Line thickness", min = 1, max = 4, step = 1, unit = "x", default = 1 },
 			{ type = "slider", key = "alpha", label = "Opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 1 },
 			{ type = "hue", key = "hue", label = "Hue", default = 0.55 },
+			{ type = "slider", key = "sat", label = "Saturation", min = 0, max = 1, step = 0.05, pct = true, default = 0.85 },
+			{ type = "toggle", key = "rainbow", label = "Rainbow", default = false },
+			{ type = "slider", key = "rainbowSpeed", label = "Rainbow speed", min = 0.1, max = 2, step = 0.1, unit = "x", default = 0.4 },
 			{ type = "toggle", key = "mesh", label = "Real mesh edges", default = true },
 			{ type = "toggle", key = "onTop", label = "Show through walls", default = false },
+			{ type = "toggle", key = "hide", label = "Hide real model", default = true },
+		} },
+		{ id = "rvHighlight", label = "Highlight viewmodel", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "slider", key = "fill", label = "Fill opacity", min = 0, max = 1, step = 0.05, pct = true, default = 0 },
+			{ type = "slider", key = "outline", label = "Outline opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 1 },
+			{ type = "hue", key = "hue", label = "Hue", default = 0.55 },
+			{ type = "slider", key = "sat", label = "Saturation", min = 0, max = 1, step = 0.05, pct = true, default = 0.85 },
+			{ type = "toggle", key = "rainbow", label = "Rainbow", default = false },
+			{ type = "slider", key = "rainbowSpeed", label = "Rainbow speed", min = 0.1, max = 2, step = 0.1, unit = "x", default = 0.4 },
+			{ type = "toggle", key = "onTop", label = "Show through walls", default = true },
+			{ type = "toggle", key = "hide", label = "Hide real model", default = true },
 		} },
 	} },
 	features = {},
@@ -443,19 +459,114 @@ do
 	}
 end
 
--- wireframe viewmodel: the gun / arms parts are hidden and drawn as lines instead (WireframeHandleAdornment).
+-- viewmodel helpers shared by Wireframe viewmodel and Highlight viewmodel.
+--   Where the viewmodel lives is a guess: any model without a Humanoid under the camera, plus workspace
+--   models whose name contains one of VM_NAMES. Hands are told apart from the weapon by part / parent names
+--   containing one of HAND_WORDS. Both lists are FILL spots: dump the real names once and hardcode them.
+local VM = { refs = setmetatable({}, { __mode = "k" }), orig = setmetatable({}, { __mode = "k" }) }
+local VM_NAMES = { "viewmodel", "view_model", "arms" } -- FILL
+local HAND_WORDS = { "arm", "hand", "glove", "sleeve", "finger", "wrist" } -- FILL
+
+function VM.models()
+	local list = {}
+	local function consider(m)
+		if m:IsA("Model") and not m:FindFirstChildOfClass("Humanoid") and not Players:GetPlayerFromCharacter(m) then
+			list[#list + 1] = m
+		end
+	end
+	local cam = workspace.CurrentCamera
+	if cam then
+		for _, c in ipairs(cam:GetChildren()) do
+			consider(c)
+		end
+	end
+	for _, c in ipairs(workspace:GetChildren()) do
+		local n = c.Name:lower()
+		for _, key in ipairs(VM_NAMES) do
+			if n:find(key, 1, true) then
+				consider(c)
+				break
+			end
+		end
+	end
+	return list
+end
+
+-- a part we may draw: visible, or hidden by us (so the other row still sees it)
+function VM.candidate(part)
+	return VM.orig[part] ~= nil or part.Transparency < 0.99
+end
+
+function VM.isHand(part, model)
+	local p = part
+	while p and p ~= model.Parent do
+		local n = p.Name:lower()
+		for _, w in ipairs(HAND_WORDS) do
+			if n:find(w, 1, true) then
+				return true
+			end
+		end
+		p = p.Parent
+	end
+	return false
+end
+
+-- hide / show are reference counted so both rows can hide the same part without fighting
+function VM.hide(part)
+	local r = VM.refs[part]
+	if not r then
+		VM.orig[part] = part.Transparency
+		r = 0
+	end
+	VM.refs[part] = r + 1
+	part.Transparency = 1
+end
+
+function VM.show(part)
+	local r = VM.refs[part]
+	if not r then
+		return
+	end
+	if r <= 1 then
+		VM.refs[part] = nil
+		if part.Parent then
+			part.Transparency = VM.orig[part] or 0
+		end
+		VM.orig[part] = nil
+	else
+		VM.refs[part] = r - 1
+	end
+end
+
+-- the game may reset transparency: keep everything we hid hidden
+function VM.keep()
+	for part in pairs(VM.refs) do
+		if part.Transparency ~= 1 then
+			part.Transparency = 1
+		end
+	end
+end
+
+local function vmColor(c)
+	local sat = c.sat or 0.85
+	if c.rainbow then
+		return Color3.fromHSV((os.clock() * (c.rainbowSpeed or 0.4)) % 1, sat, 1)
+	end
+	return Color3.fromHSV(c.hue or 0.55, sat, 1)
+end
+
+-- wireframe viewmodel: parts are drawn as lines (WireframeHandleAdornment).
 --   Real mesh edges: tries AssetService:CreateEditableMeshAsync on every MeshPart and draws its triangle
 --   edges. Executors that block that (or meshes it cannot read) fall back to the 12 edges of the part's box.
---   Where the viewmodel lives is a guess: any model without a Humanoid under the camera, plus workspace
---   models whose name contains one of VM_NAMES. First run prints what it looked at if it finds nothing.
+--   Thickness draws 1-4 copies nudged a hair apart, there is no real line width on this adornment.
 do
 	local AssetService = game:GetService("AssetService")
-	local VM_NAMES = { "viewmodel", "view_model", "arms" } -- FILL: the real viewmodel name once you dump it
-	local MAX_TRIS = 1200 -- per mesh, triangles are skipped evenly past this
+	local MAX_TRIS = 800 -- per mesh, triangles are skipped evenly past this
+	local OFFS = { Vector3.new(0, 0, 0), Vector3.new(1, 1, 1), Vector3.new(-1, -1, -1), Vector3.new(1, -1, 1) }
+	local STEP = 0.006 -- studs between copies
 
 	local enabled, cfg, acc, busy, reported = false, {}, 0, false, false
-	local orig = setmetatable({}, { __mode = "k" }) -- part -> original Transparency
-	local wires = {} -- part -> adornment
+	local wires = {} -- part -> { adorns, sig, hidden }
 	local meshData = {} -- MeshId -> list of { v1, v2, v3 } or false
 	local folder
 
@@ -473,42 +584,24 @@ do
 		return folder
 	end
 
-	local function clear()
-		for part, w in pairs(wires) do
+	local function drop(part)
+		local rec = wires[part]
+		if not rec then
+			return
+		end
+		wires[part] = nil
+		for _, w in ipairs(rec.adorns) do
 			w:Destroy()
-			wires[part] = nil
 		end
-		for part, t in pairs(orig) do
-			if part.Parent then
-				part.Transparency = t
-			end
+		if rec.hidden then
+			VM.show(part)
 		end
-		table.clear(orig)
 	end
 
-	local function roots()
-		local list = {}
-		local function consider(m)
-			if m:IsA("Model") and not m:FindFirstChildOfClass("Humanoid") and not Players:GetPlayerFromCharacter(m) then
-				list[#list + 1] = m
-			end
+	local function dropAll()
+		for part in pairs(wires) do
+			drop(part)
 		end
-		local cam = workspace.CurrentCamera
-		if cam then
-			for _, c in ipairs(cam:GetChildren()) do
-				consider(c)
-			end
-		end
-		for _, c in ipairs(workspace:GetChildren()) do
-			local n = c.Name:lower()
-			for _, key in ipairs(VM_NAMES) do
-				if n:find(key, 1, true) then
-					consider(c)
-					break
-				end
-			end
-		end
-		return list
 	end
 
 	local function meshTris(part)
@@ -551,91 +644,109 @@ do
 	end
 
 	local function build(part)
-		local w = Instance.new("WireframeHandleAdornment")
-		w.Adornee = part
-		w.Parent = getFolder()
-		local drew = false
+		local tris, k
 		if cfg.mesh ~= false and part:IsA("MeshPart") and part.MeshId ~= "" then
-			local tris = meshTris(part)
+			tris = meshTris(part)
 			local ms = part.MeshSize
 			if tris and ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
-				local k = part.Size / ms
+				k = part.Size / ms
+			else
+				tris = nil
+			end
+		end
+		local adorns = {}
+		for i = 1, math.clamp(math.floor(cfg.thickness or 1), 1, #OFFS) do
+			local w = Instance.new("WireframeHandleAdornment")
+			w.Adornee = part
+			w.CFrame = CFrame.new(OFFS[i] * STEP)
+			w.Parent = getFolder()
+			if tris then
 				for _, t in ipairs(tris) do
 					w:AddPath({ t[1] * k, t[2] * k, t[3] * k }, true)
 				end
-				drew = true
+			else
+				drawBox(w, part.Size)
 			end
+			adorns[#adorns + 1] = w
 		end
-		if not drew then
-			drawBox(w, part.Size)
-		end
-		return w
+		return adorns
 	end
 
 	local function scan(ctx)
-		for part, w in pairs(wires) do
-			if not part:IsDescendantOf(workspace) then
-				w:Destroy()
-				wires[part] = nil
-				orig[part] = nil
-			end
-		end
-		local list = roots()
-		for _, model in ipairs(list) do
+		local sig = tostring(math.floor(cfg.thickness or 1)) .. "|" .. tostring(cfg.mesh ~= false)
+		local filter = cfg.parts or "All"
+		local seen = {}
+		for _, model in ipairs(VM.models()) do
 			for _, d in ipairs(model:GetDescendants()) do
-				if d:IsA("BasePart") and not wires[d] and d.Transparency < 0.99 then
-					orig[d] = d.Transparency
-					wires[d] = build(d)
+				if d:IsA("BasePart") and VM.candidate(d) then
+					local hand = VM.isHand(d, model)
+					if filter == "All" or (filter == "Hands only" and hand) or (filter == "Weapon only" and not hand) then
+						seen[d] = true
+						local rec = wires[d]
+						if rec and rec.sig ~= sig then
+							drop(d)
+							rec = nil
+						end
+						if not rec then
+							wires[d] = { adorns = build(d), sig = sig, hidden = false }
+						end
+					end
 				end
 			end
 		end
-		if not enabled then
+		for part in pairs(wires) do
+			if not seen[part] or not part:IsDescendantOf(workspace) then
+				drop(part)
+			end
+		end
+		local wantHide = cfg.hide ~= false
+		local n = 0
+		for part, rec in pairs(wires) do
+			n += 1
+			if wantHide and not rec.hidden then
+				VM.hide(part)
+				rec.hidden = true
+			elseif not wantHide and rec.hidden then
+				VM.show(part)
+				rec.hidden = false
+			end
+		end
+		if not enabled or reported then
 			return
 		end
-		local color = Color3.fromHSV(cfg.hue or 0.55, 0.85, 1)
-		for _, w in pairs(wires) do
-			w.Color3 = color
-			w.Transparency = 1 - (cfg.alpha or 1)
-			w.AlwaysOnTop = cfg.onTop == true
-		end
-		if not reported then
+		if n > 0 then
 			reported = true
-			if next(wires) then
-				local n = 0
-				for _ in pairs(wires) do
-					n += 1
-				end
-				ctx.notify(("wireframe: %d parts"):format(n), Color3.fromRGB(72, 214, 134))
-			else
-				local names = {}
-				local cam = workspace.CurrentCamera
-				for _, c in ipairs(cam and cam:GetChildren() or {}) do
-					names[#names + 1] = c.Name .. "(" .. c.ClassName .. ")"
-				end
-				print("[FMenu] wireframe: no viewmodel found. camera children: " .. table.concat(names, ", "))
-				ctx.notify("wireframe: no viewmodel found, hold a weapon (see console)", Color3.fromRGB(255, 214, 64))
-				reported = false -- try again next scan
+			ctx.notify(("wireframe: %d parts"):format(n), Color3.fromRGB(72, 214, 134))
+		else
+			local names = {}
+			local cam = workspace.CurrentCamera
+			for _, c in ipairs(cam and cam:GetChildren() or {}) do
+				names[#names + 1] = c.Name .. "(" .. c.ClassName .. ")"
 			end
+			print("[FMenu] wireframe: no viewmodel found. camera children: " .. table.concat(names, ", "))
 		end
 	end
 
 	features.rvWire = {
-		set = function(on, _v, _c, o)
+		set = function(on, _v, ctx, o)
 			enabled, cfg = on, o
 			acc = 1
 			reported = false
 			if not on then
-				clear()
+				dropAll()
 			end
 		end,
 		step = function(dt, ctx)
 			if not enabled then
 				return
 			end
-			-- the game may reset transparency, so keep the real parts hidden every frame
-			for part in pairs(wires) do
-				if part.Transparency ~= 1 then
-					part.Transparency = 1
+			VM.keep()
+			local color, alpha, top = vmColor(cfg), 1 - (cfg.alpha or 1), cfg.onTop == true
+			for _, rec in pairs(wires) do
+				for _, w in ipairs(rec.adorns) do
+					w.Color3 = color
+					w.Transparency = alpha
+					w.AlwaysOnTop = top
 				end
 			end
 			acc += dt
@@ -650,7 +761,122 @@ do
 		end,
 		destroy = function()
 			enabled = false
-			clear()
+			dropAll()
+			if folder then
+				pcall(folder.Destroy, folder)
+				folder = nil
+			end
+		end,
+	}
+end
+
+-- highlight viewmodel: one Highlight per viewmodel model. Fill 0 = outline only. With "Hide real model" the
+-- parts go fully transparent so only the outline is left (a Highlight still draws on transparent parts, didn't
+-- check it in Rivals: if the outline vanishes when hidden, turn "Hide real model" off).
+do
+	local enabled, cfg, acc = false, {}, 0
+	local hl = {} -- model -> { h, parts = { [part] = true } }
+	local folder
+
+	local function getFolder()
+		local cam = workspace.CurrentCamera
+		if folder and folder.Parent == cam then
+			return folder
+		end
+		if folder then
+			pcall(folder.Destroy, folder)
+		end
+		folder = Instance.new("Folder")
+		folder.Name = "FMenuHighlight"
+		folder.Parent = cam
+		return folder
+	end
+
+	local function unhide(rec)
+		for part in pairs(rec.parts) do
+			VM.show(part)
+		end
+		table.clear(rec.parts)
+	end
+
+	local function drop(model)
+		local rec = hl[model]
+		if not rec then
+			return
+		end
+		hl[model] = nil
+		rec.h:Destroy()
+		unhide(rec)
+	end
+
+	local function dropAll()
+		for model in pairs(hl) do
+			drop(model)
+		end
+	end
+
+	local function scan()
+		local seen = {}
+		local wantHide = cfg.hide ~= false
+		for _, model in ipairs(VM.models()) do
+			seen[model] = true
+			local rec = hl[model]
+			if not rec then
+				local h = Instance.new("Highlight")
+				h.Adornee = model
+				h.Parent = getFolder()
+				rec = { h = h, parts = {} }
+				hl[model] = rec
+			end
+			if wantHide then
+				for _, d in ipairs(model:GetDescendants()) do
+					if d:IsA("BasePart") and not rec.parts[d] and VM.candidate(d) then
+						VM.hide(d)
+						rec.parts[d] = true
+					end
+				end
+			else
+				unhide(rec)
+			end
+		end
+		for model, rec in pairs(hl) do
+			if not seen[model] or not model:IsDescendantOf(workspace) then
+				drop(model)
+			end
+		end
+	end
+
+	features.rvHighlight = {
+		set = function(on, _v, _c, o)
+			enabled, cfg = on, o
+			acc = 1
+			if not on then
+				dropAll()
+			end
+		end,
+		step = function(dt)
+			if not enabled then
+				return
+			end
+			VM.keep()
+			local color = vmColor(cfg)
+			local mode = cfg.onTop ~= false and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+			for _, rec in pairs(hl) do
+				local h = rec.h
+				h.FillColor, h.OutlineColor = color, color
+				h.FillTransparency = 1 - (cfg.fill or 0)
+				h.OutlineTransparency = 1 - (cfg.outline or 1)
+				h.DepthMode = mode
+			end
+			acc += dt
+			if acc >= 0.5 then -- picks up weapon swaps
+				acc = 0
+				pcall(scan)
+			end
+		end,
+		destroy = function()
+			enabled = false
+			dropAll()
 			if folder then
 				pcall(folder.Destroy, folder)
 				folder = nil
