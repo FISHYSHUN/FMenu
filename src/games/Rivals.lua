@@ -9,10 +9,7 @@
 --   Aim lock    hold right mouse. Picks a target inside the ring, then stays on it (even if it leaves the
 --               ring) until you let go, it dies, or it goes out of sight. Smoothing 0 = hard snap.
 --   With both on, lock wins.
---   Target priority (option on both): Crosshair / Lowest HP / Nearest decides who gets picked inside the ring.
---
---   Extras      Nearest enemy HUD (world distance), Session K/D HUD (leaderstats, falls back to own deaths),
---               Viewmodel chams (recolors the gun / arms models parented to the camera).
+--   Wireframe viewmodel  hides your gun / arms and draws the edges of every part instead (blender style).
 --
 -- Rivals teleports you from the lobby into a match (a different place of the same universe). This module
 -- is picked by universe id in Games.index, and loader.lua re-runs itself after the teleport, so the tab
@@ -36,13 +33,9 @@ local function holdOption()
 	return { type = "choice", key = "hold", label = "Aim key", choices = { "Right mouse", "Left mouse", "Shift", "Always" }, default = "Right mouse" }
 end
 
--- who gets picked when several enemies are inside the ring, an option on both Aim assist and Aim lock
-local function priorityOption()
-	return { type = "choice", key = "priority", label = "Target priority", choices = { "Crosshair", "Lowest HP", "Nearest" }, default = "Crosshair" }
-end
 local CHEST = { "UpperTorso", "Torso", "HumanoidRootPart" }
 
-local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0, priority = "Crosshair" }
+local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0 }
 local aim = { assist = false, lock = false, strength = 0.4, smooth = 0, bound = false, target = nil, dead = 0.4, falloff = 0.6 }
 
 local function isEnemy(plr)
@@ -113,29 +106,14 @@ local function pick(char, center, cam, maxDist)
 	return best, bestD
 end
 
--- lower score wins: pixels from the crosshair, health, or world distance depending on the priority option
-local function score(plr, d)
-	if shared.priority == "Lowest HP" then
-		local hum = Util.humanoid(plr.Character)
-		return hum and hum.Health or math.huge
-	elseif shared.priority == "Nearest" then
-		local r, me = Util.rootOf(plr.Character), Util.root()
-		return (r and me) and (r.Position - me.Position).Magnitude or math.huge
-	end
-	return d
-end
-
--- best enemy inside `radius` pixels by priority -> part, player, distance (pixels from the centre)
+-- closest enemy to the screen centre inside `radius` pixels -> part, player, distance
 local function acquire(cam, center, radius)
-	local bestPart, bestPlr, bestD, bestS
+	local bestPart, bestPlr, bestD
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if valid(plr) then
 			local part, d = pick(plr.Character, center, cam, radius)
-			if part then
-				local s = score(plr, d)
-				if not bestS or s < bestS then
-					bestPart, bestPlr, bestD, bestS = part, plr, d, s
-				end
+			if part and (not bestD or d < bestD) then
+				bestPart, bestPlr, bestD = part, plr, d
 			end
 		end
 	end
@@ -162,11 +140,10 @@ local Rivals = {
 		{ id = "rvAim", label = "Aim assist", slider = "Pull strength", value = 40, on = false, fmt = range(0, 100, "%"), opts = {
 			Util.modeOption(),
 			holdOption(),
-			priorityOption(),
 			{ type = "slider", key = "dead", label = "Dead zone", min = 0.1, max = 3, step = 0.1, unit = " deg", default = 0.4 },
 			{ type = "slider", key = "falloff", label = "Edge falloff", min = 0, max = 1, step = 0.05, pct = true, default = 0.6 },
 		} },
-		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end, opts = { Util.modeOption(), holdOption(), priorityOption() } },
+		{ id = "rvLock", label = "Aim lock", slider = "Smoothing (0 = snap)", value = 0, on = false, fmt = function(v) return v == 0 and "snap" or ("%d%%"):format(v) end, opts = { Util.modeOption(), holdOption() } },
 		{ id = "rvFov", label = "FOV ring", slider = "Radius", value = 40, on = false, fmt = range(40, 400, "px"), opts = {
 			Util.modeOption(),
 			{ type = "slider", key = "thickness", label = "Thickness", min = 1, max = 5, step = 0.5, unit = "px", default = 1.5 },
@@ -186,12 +163,10 @@ local Rivals = {
 		{ header = "Filters" },
 		{ id = "rvVis", label = "Visible only", slider = "Unused", value = 0, on = true },
 		{ id = "rvTeam", label = "Team check", slider = "Unused", value = 0, on = true },
-		{ header = "Extras" },
-		{ id = "rvNear", label = "Nearest enemy", slider = "Unused", value = 0, on = false },
-		{ id = "rvKd", label = "Session K/D", slider = "Unused", value = 0, on = false },
-		{ id = "rvViewmodel", label = "Viewmodel chams", slider = "Unused", value = 0, on = false, opts = {
-			{ type = "choice", key = "material", label = "Material", choices = { "Neon", "ForceField", "Glass" }, default = "Neon" },
-			{ type = "slider", key = "alpha", label = "Opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 0.6 },
+		{ header = "Visuals" },
+		{ id = "rvWire", label = "Wireframe viewmodel", slider = "Unused", value = 0, on = false, opts = {
+			{ type = "slider", key = "thickness", label = "Line thickness", min = 0.005, max = 0.05, step = 0.005, unit = " st", default = 0.02 },
+			{ type = "slider", key = "alpha", label = "Opacity", min = 0.1, max = 1, step = 0.05, pct = true, default = 1 },
 			{ type = "hue", key = "hue", label = "Hue", default = 0.55 },
 		} },
 	} },
@@ -225,12 +200,9 @@ features.rvPred = {
 
 -- aim assist + aim lock share one render step (aim key held, set in either row's options)
 do
-	local function activeCfg()
-		return (aim.lock and aim.lockCfg) or aim.assistCfg or {}
-	end
-
 	local function aimHeld()
-		local hold = activeCfg().hold or "Right mouse"
+		local o = (aim.lock and aim.lockCfg) or aim.assistCfg or {}
+		local hold = o.hold or "Right mouse"
 		if hold == "Always" then
 			return true
 		elseif hold == "Left mouse" then
@@ -252,9 +224,6 @@ do
 		end
 		local vp = cam.ViewportSize
 		local center = Vector2.new(vp.X / 2, vp.Y / 2)
-
-		-- priority comes from whichever row is driving (lock wins when both are on)
-		shared.priority = activeCfg().priority or "Crosshair"
 
 		-- keep the current target while it stays valid (lock: anywhere on screen, assist: a bit past the ring)
 		local part, d
@@ -473,165 +442,87 @@ do
 	}
 end
 
--- nearest enemy: world-distance nearest, ignores the FOV ring and line of sight
+-- wireframe viewmodel: every part of the gun / arms models under the camera is hidden and gets a
+-- SelectionBox, which draws that part's edges. Edges are per part (box outline), not per triangle:
+-- Roblox has no mesh wireframe without EditableMesh. Originals are restored when turned off.
 do
-	local label, enabled, acc = nil, false, 0
-	features.rvNear = {
-		init = function(ctx)
-			label = ctx.hudLabel("NearestEnemy", Color3.fromRGB(255, 120, 120), Enum.Font.GothamBold)
-			ctx.draggable(label, "NearestEnemy", "left", 1)
-		end,
-		set = function(on)
-			enabled = on
-			label.Visible = on
-		end,
-		step = function(dt)
-			if not enabled then
-				return
-			end
-			acc += dt
-			if acc < 0.1 then
-				return
-			end
-			acc = 0
-			local me = Util.root()
-			local best, bestD
-			for _, plr in ipairs(Players:GetPlayers()) do
-				if valid(plr) then
-					local r = Util.rootOf(plr.Character)
-					if r and me then
-						local d = (r.Position - me.Position).Magnitude
-						if not bestD or d < bestD then
-							best, bestD = plr, d
-						end
-					end
-				end
-			end
-			if best then
-				local hum = Util.humanoid(best.Character)
-				label.Text = ("nearest  %s  %dhp  %dm"):format(best.DisplayName, math.floor(hum and hum.Health or 0), math.floor(bestD))
-			else
-				label.Text = "nearest  --"
-			end
-		end,
-	}
-end
-
--- session K/D: reads leaderstats, falls back to counting your own deaths
-do
-	local KILLS, DEATHS = "Kills", "Deaths" -- FILL: print(lp.leaderstats:GetChildren()) in a match for the real names
-	local label, enabled, acc = nil, false, 0
-	local base, deaths, diedConn = {}, 0, nil
-	local function stat(name)
-		local ls = lp:FindFirstChild("leaderstats")
-		local v = ls and ls:FindFirstChild(name)
-		return v and v:IsA("ValueBase") and tonumber(v.Value) or nil
-	end
-	local function hook(char)
-		if diedConn then
-			diedConn:Disconnect()
-			diedConn = nil
-		end
-		local hum = char:WaitForChild("Humanoid", 5)
-		if hum then
-			diedConn = hum.Died:Connect(function()
-				deaths += 1
-			end)
-		end
-	end
-	local charConn
-	features.rvKd = {
-		init = function(ctx)
-			label = ctx.hudLabel("SessionKD", Color3.fromRGB(236, 238, 244), Enum.Font.GothamBold)
-			ctx.draggable(label, "SessionKD", "left", 1)
-		end,
-		set = function(on)
-			enabled = on
-			label.Visible = on
-			if on and not charConn then
-				base = { k = stat(KILLS), d = stat(DEATHS) }
-				deaths = 0
-				charConn = lp.CharacterAdded:Connect(hook)
-				if lp.Character then
-					task.spawn(hook, lp.Character)
-				end
-			elseif not on and charConn then
-				charConn:Disconnect()
-				charConn = nil
-				if diedConn then
-					diedConn:Disconnect()
-					diedConn = nil
-				end
-			end
-		end,
-		step = function(dt)
-			if not enabled then
-				return
-			end
-			acc += dt
-			if acc < 0.5 then
-				return
-			end
-			acc = 0
-			local k, d = stat(KILLS), stat(DEATHS)
-			local kills = (k and base.k) and (k - base.k) or nil
-			local dead = (d and base.d) and (d - base.d) or deaths
-			label.Text = kills and ("session  %dK  %dD  %.2f"):format(kills, dead, kills / math.max(dead, 1)) or ("session  ?K  %dD"):format(dead)
-		end,
-		destroy = function()
-			if charConn then
-				charConn:Disconnect()
-				charConn = nil
-			end
-			if diedConn then
-				diedConn:Disconnect()
-				diedConn = nil
-			end
-		end,
-	}
-end
-
--- viewmodel chams: recolors the gun / arms models parented to the camera (originals restored when off)
-do
-	local MATERIALS = { Neon = Enum.Material.Neon, ForceField = Enum.Material.ForceField, Glass = Enum.Material.Glass }
 	local enabled, cfg, acc = false, {}, 0
-	local orig = setmetatable({}, { __mode = "k" }) -- part -> { m, c, t }
-	local function restore()
-		for part, o in pairs(orig) do
+	local orig = setmetatable({}, { __mode = "k" }) -- part -> original Transparency
+	local boxes = {} -- part -> SelectionBox
+	local folder
+
+	local function getFolder()
+		local cam = workspace.CurrentCamera
+		if folder and folder.Parent == cam then
+			return folder
+		end
+		if folder then
+			pcall(folder.Destroy, folder)
+		end
+		folder = Instance.new("Folder")
+		folder.Name = "FMenuWire"
+		folder.Parent = cam
+		return folder
+	end
+
+	local function clear()
+		for part, box in pairs(boxes) do
+			box:Destroy()
+			boxes[part] = nil
+		end
+		for part, t in pairs(orig) do
 			if part.Parent then
-				part.Material, part.Color, part.Transparency = o.m, o.c, o.t
+				part.Transparency = t
 			end
 		end
 		table.clear(orig)
 	end
+
 	local function apply()
 		local cam = workspace.CurrentCamera
 		if not cam then
 			return
 		end
+		for part, box in pairs(boxes) do
+			if not part:IsDescendantOf(cam) then -- weapon swapped, old model is gone
+				box:Destroy()
+				boxes[part] = nil
+				orig[part] = nil
+			end
+		end
 		local color = Color3.fromHSV(cfg.hue or 0.55, 0.85, 1)
 		for _, model in ipairs(cam:GetChildren()) do
-			-- FILL: if it also hits stuff it should not, narrow this to the viewmodel's real name
+			-- FILL: if it also catches models that are not your gun / arms, narrow this to the viewmodel's real name
 			if model:IsA("Model") and not model:FindFirstChildOfClass("Humanoid") then
 				for _, d in ipairs(model:GetDescendants()) do
 					if d:IsA("BasePart") then
-						if not orig[d] then
-							orig[d] = { m = d.Material, c = d.Color, t = d.Transparency }
+						local box = boxes[d]
+						if not box and d.Transparency < 0.99 then -- skip parts that were already invisible
+							orig[d] = d.Transparency
+							box = Instance.new("SelectionBox")
+							box.Adornee = d
+							box.SurfaceTransparency = 1
+							box.Parent = getFolder()
+							boxes[d] = box
 						end
-						d.Material = MATERIALS[cfg.material] or Enum.Material.Neon
-						d.Color = color
-						d.Transparency = 1 - (cfg.alpha or 0.6)
+						if box then
+							box.Color3 = color
+							box.LineThickness = cfg.thickness or 0.02
+							box.Transparency = 1 - (cfg.alpha or 1)
+							d.Transparency = 1
+						end
 					end
 				end
 			end
 		end
 	end
-	features.rvViewmodel = {
+
+	features.rvWire = {
 		set = function(on, _v, _c, o)
 			enabled, cfg = on, o
 			acc = 1
 			if not on then
-				restore()
+				clear()
 			end
 		end,
 		step = function(dt)
@@ -639,12 +530,19 @@ do
 				return
 			end
 			acc += dt
-			if acc >= 0.25 then -- viewmodels get rebuilt on weapon swap, so re-apply
+			if acc >= 0.1 then -- viewmodels get rebuilt on weapon swap, and the game may reset transparency
 				acc = 0
 				apply()
 			end
 		end,
-		destroy = restore,
+		destroy = function()
+			enabled = false
+			clear()
+			if folder then
+				pcall(folder.Destroy, folder)
+				folder = nil
+			end
+		end,
 	}
 end
 
