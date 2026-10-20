@@ -183,6 +183,7 @@ local baseTabs = {
 		{ id = "autohide", label = "Auto-hide", slider = "Delay (1-10 s)", value = 33, on = true, fmt = range(1, 10, "s") },
 		{ id = "hudlock", label = "Lock HUD", slider = "Unused", value = 0, on = false },
 		{ id = "notifs", label = "Notifications", slider = "Unused", value = 0, on = true },
+		{ id = "carry", label = "Carry to next game", slider = "Unused", value = 0, on = true },
 		{ header = "Cheat level" },
 		{ id = "cheatLevel", label = "Apply level to all", slider = "Blatant / Semi / Legit", value = 0, on = false, fmt = function(v) return v < 34 and "Blatant" or (v < 67 and "Semi" or "Legit") end },
 		{ header = "Saving" },
