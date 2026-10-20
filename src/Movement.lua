@@ -30,6 +30,10 @@
 -- knees bend = -X) and were NOT tested on a live character: if a limb swings the wrong way, flip the sign in
 -- the pose function (sprintPose / runPose / hangPose / mantlePose / kickPose / hopPose).
 --
+-- Extra poses (Parkour animations row): "leap" while sprinting through the air and a "landing" crouch after a
+-- hard fall (scaled by impact speed). Both are layered on top of the game's own animation instead of replacing
+-- it, so walking / running keeps animating. Each has its own toggle in the row's right-click menu.
+--
 -- Anchoring: while hanging and mantling the root part is Anchored (released when you drop, mantle ends, the
 -- row is turned off or the menu is destroyed). Games with movement anti-cheat may rubber-band any of this.
 
@@ -100,6 +104,8 @@ Movement.tab = { name = "Parkour", rows = {
 	{ header = "Visuals" },
 	{ id = "pkAnim", label = "Parkour animations", slider = "Pose strength", value = 67, on = true, fmt = Util.range(0, 150, "%"), opts = {
 		{ type = "slider", key = "smooth", label = "Smoothing", min = 4, max = 20, step = 1, default = 10 },
+		{ type = "toggle", key = "landing", label = "Landing crouch", default = true },
+		{ type = "toggle", key = "leap", label = "Sprint leap pose", default = true },
 	} },
 } }
 
@@ -139,6 +145,7 @@ local S = {
 	run = nil, hang = nil, mantle = nil, flash = nil,
 	noWallUntil = 0, noGrabUntil = 0, lastRunPart = nil,
 	airJumps = 0, hops = 0,
+	wasAir = false, fallV = 0, -- landing detection: was airborne last frame, fastest fall speed of this air time
 	sprintOn = false, sprintSet = nil, origWS = 16, phase = 0,
 	autoRotate = nil, anchored = false,
 	roll = 0, fov = 0, fovBase = nil, fovLast = nil,
@@ -149,6 +156,7 @@ local function resetState()
 	S.state, S.run, S.hang, S.mantle, S.flash = "none", nil, nil, nil, nil
 	S.anchored, S.sprintOn, S.sprintSet, S.autoRotate = false, false, nil, nil
 	S.airJumps, S.hops, S.lastRunPart = 0, 0, nil
+	S.wasAir, S.fallV = false, 0
 end
 
 ---------------------------------------------------------------------
@@ -345,6 +353,36 @@ local function hopPose()
 	add(t, "LeftHip", 0.6)
 	add(t, "RightKnee", -1.0)
 	add(t, "LeftKnee", -1.0)
+	return t
+end
+
+-- sprinting through the air: lead arm and knee reach forward, the trailing leg folds behind
+local function leapPose(lean, pump)
+	local t = {}
+	add(t, "Waist", -0.35 * lean)
+	add(t, "Neck", 0.25 * lean)
+	add(t, "RightShoulder", 2.3 * pump, 0, 0.2)
+	add(t, "LeftShoulder", -0.9 * pump, 0, -0.3)
+	add(t, "RightElbow", 0.4 * pump)
+	add(t, "LeftElbow", 0.9 * pump)
+	add(t, "RightHip", 1.0 * pump)
+	add(t, "LeftHip", -0.7 * pump)
+	add(t, "RightKnee", -0.8 * pump)
+	add(t, "LeftKnee", -1.3 * pump)
+	return t
+end
+
+-- landing absorb: k = 0..1 crouch depth (the caller fades it out over the flash)
+local function landPose(k)
+	local t = {}
+	add(t, "Waist", -0.5 * k)
+	add(t, "Neck", 0.3 * k)
+	add(t, "RightShoulder", 0.9 * k, 0, 0.5 * k)
+	add(t, "LeftShoulder", 0.9 * k, 0, -0.5 * k)
+	add(t, "RightHip", 1.0 * k)
+	add(t, "LeftHip", 1.0 * k)
+	add(t, "RightKnee", -1.5 * k)
+	add(t, "LeftKnee", -1.5 * k)
 	return t
 end
 
@@ -647,6 +685,19 @@ features.pkCore = {
 			S.state, S.hang, S.mantle = "none", nil, nil
 		end
 
+		-- landing: remember the fastest fall of this air time, crouch when it ends hard
+		if air then
+			S.wasAir = true
+			S.fallV = math.min(S.fallV, root.AssemblyLinearVelocity.Y)
+		elseif S.wasAir then
+			S.wasAir = false
+			local impact = -S.fallV
+			S.fallV = 0
+			if impact > 30 and S.state == "none" and hum.FloorMaterial ~= Enum.Material.Air and cfg.anim.on and cfg.anim.o.landing ~= false then
+				S.flash = { kind = "land", t = 0, dur = 0.35, power = math.clamp((impact - 30) / 60, 0.25, 1) }
+			end
+		end
+
 		-- landing refills the air-time counters
 		if hum.FloorMaterial ~= Enum.Material.Air and S.state == "none" then
 			S.airJumps, S.hops, S.lastRunPart = 0, 0, nil
@@ -803,13 +854,22 @@ features.pkCore = {
 				pose, override = hangPose(now), true
 			elseif S.state == "mantle" then
 				pose, override = mantlePose(S.mantle.t / S.mantle.dur), true
+			elseif S.flash and S.flash.kind == "land" then
+				-- layered on the game's animation (no override), so its walk / run cycle keeps playing underneath
+				local f = S.flash
+				pose = landPose(f.power * (1 - f.t / f.dur) ^ 1.5)
 			elseif S.flash then
 				pose, override = (S.flash.kind == "hop" and hopPose() or kickPose()), true
 			elseif S.sprintOn then
 				local hv = flat(root.AssemblyLinearVelocity).Magnitude
 				if hv > RUN_MIN_SPEED then
-					S.phase += dt * hv * 0.55
-					pose = sprintPose(S.phase, cfg.sprint.o.lean or 1, cfg.sprint.o.pump or 1)
+					local lean, pump = cfg.sprint.o.lean or 1, cfg.sprint.o.pump or 1
+					if air and cfg.anim.o.leap ~= false then
+						pose = leapPose(lean, pump)
+					else
+						S.phase += dt * hv * 0.55
+						pose = sprintPose(S.phase, lean, pump)
+					end
 				end
 			end
 			if override then
