@@ -53,6 +53,11 @@ local GRAB_REACH = 3.4 -- how far ahead a ledge is looked for
 local RUN_MIN_SPEED = 8 -- horizontal speed needed to start a wall run
 local COOLDOWN = 0.35 -- seconds before a wall can be used again after a wall run / jump
 local CAM_BIND = "FMenuParkourCam"
+-- true  = the root part is Anchored while hanging / mantling (stable, but a client can't replicate an anchored part,
+--         so other players may see you frozen until you let go).
+-- false = nothing is anchored: velocity is zeroed and the CFrame re-set every frame instead (replicates normally,
+--         may jitter slightly). Flip this if people report you "freezing" on ledges.
+local ANCHOR_HOLD = true
 
 local KEYS = {
 	["Left Shift"] = Enum.KeyCode.LeftShift,
@@ -220,14 +225,16 @@ local function applyPose(dt, targets, strength, speed)
 	local k = 1 - math.exp(-dt * speed)
 	for name, j in pairs(rig.joints) do
 		if j.m.Parent then
-			local t = targets and targets[name] or Vector3.zero
-			j.cur = j.cur:Lerp(t * strength, k)
-			if j.cur.Magnitude > 1e-3 then
-				j.m.C0 = j.c0 * CFrame.Angles(j.cur.X, j.cur.Y, j.cur.Z)
-				j.dirty = true
-			elseif j.dirty then
-				j.m.C0 = j.c0
-				j.cur, j.dirty = Vector3.zero, false
+			local t = targets and targets[name]
+			if t or j.dirty then -- settled joints with no target cost nothing
+				j.cur = j.cur:Lerp((t or Vector3.zero) * strength, k)
+				if j.cur.Magnitude > 1e-3 then
+					j.m.C0 = j.c0 * CFrame.Angles(j.cur.X, j.cur.Y, j.cur.Z)
+					j.dirty = true
+				elseif j.dirty then
+					j.m.C0 = j.c0
+					j.cur, j.dirty = Vector3.zero, false
+				end
 			end
 		end
 	end
@@ -440,7 +447,12 @@ local function startMantle(root, hum)
 	local standH = hum.HipHeight + root.Size.Y / 2
 	local b = V3(h.cf.Position.X, h.ledgeY + standH + 0.35, h.cf.Position.Z)
 	S.state = "mantle"
-	S.mantle = { t = 0, dur = 0.6 / (cfg.mantle.o.speed or 1), a = root.Position, b = b, c = b - h.n * 1.8, n = h.n }
+	-- step forward onto the ledge, but only as far as there is floor to stand on (thin ledges / railings)
+	local c = b - h.n * 1.8
+	if not workspace:Raycast(c + UP * 2, V3(0, -(standH + 4), 0), Util.rayParams()) then
+		c = b - h.n * 0.9
+	end
+	S.mantle = { t = 0, dur = 0.6 / (cfg.mantle.o.speed or 1), a = root.Position, b = b, c = c, n = h.n }
 end
 
 local function dropHang(root)
@@ -472,7 +484,8 @@ local function tryGrab(root, hum)
 	local n = flatNormal(hit)
 	-- the top of that wall: a ray straight down from just inside it, above the reach
 	local top = workspace:Raycast(hit.Position - n * 0.5 + UP * (reachUp + 2), V3(0, -(reachUp + 4.5), 0), Util.rayParams())
-	if not top or top.Instance ~= hit.Instance or top.Normal.Y < 0.8 then
+	-- the top may belong to a neighbouring part (stacked / tiled walls), it only has to be solid and not a player
+	if not top or not top.Instance.CanCollide or top.Normal.Y < 0.8 or Util.playerFromPart(top.Instance) then
 		return
 	end
 	local ledgeY = top.Position.Y
@@ -484,10 +497,16 @@ local function tryGrab(root, hum)
 	end
 	local target = V3(hit.Position.X, ledgeY - 2.5, hit.Position.Z) + n * 1.0
 	root.AssemblyLinearVelocity = Vector3.zero
-	root.Anchored = true
+	if ANCHOR_HOLD then
+		root.Anchored = true
+	end
 	S.anchored = true
+	local cf = CFrame.lookAt(target, target - n)
 	S.state = "hang"
-	S.hang = { cf = CFrame.lookAt(target, target - n), n = n, ledgeY = ledgeY, part = hit.Instance, t = 0, from = root.CFrame, wHold = 0 }
+	S.hang = {
+		cf = cf, n = n, ledgeY = ledgeY, part = hit.Instance, t = 0, from = root.CFrame, wHold = 0,
+		rel = hit.Instance.CFrame:ToObjectSpace(cf), -- grab point in the wall's space, so moving platforms carry you
+	}
 	S.airJumps, S.hops = 0, 0
 end
 
@@ -606,6 +625,7 @@ features.pkCore = {
 	set = function() end,
 
 	step = function(dt)
+		dt = math.min(dt, 0.1) -- a lag spike must not skip a whole mantle / wall run
 		local _, root, hum = refreshChar()
 		if not (root and hum) then
 			return
@@ -637,6 +657,8 @@ features.pkCore = {
 			if not S.sprintOn then
 				S.sprintOn = true
 				S.origWS = hum.WalkSpeed
+			elseif S.sprintSet and hum.WalkSpeed ~= S.sprintSet then
+				S.origWS = hum.WalkSpeed -- the game (or the Speed row) changed it: that is the new normal speed
 			end
 			local target = math.max(S.origWS, lerp(16, 60, cfg.sprint.v))
 			if hum.WalkSpeed ~= target then
@@ -712,6 +734,18 @@ features.pkCore = {
 		elseif S.state == "hang" then
 			local h = S.hang
 			h.t += dt
+			if h.part.Parent then
+				local cf = h.part.CFrame * h.rel
+				h.ledgeY += cf.Position.Y - h.cf.Position.Y
+				h.cf = cf
+				local n = flat(-cf.LookVector)
+				if n.Magnitude > 0.1 then
+					h.n = n.Unit
+				end
+			end
+			if not ANCHOR_HOLD then
+				root.AssemblyLinearVelocity = Vector3.zero
+			end
 			root.CFrame = h.from:Lerp(h.cf, smooth(h.t / 0.12))
 			local o = cfg.mantle.o
 			local move = hum.MoveDirection
@@ -738,6 +772,9 @@ features.pkCore = {
 				pos = m.a:Lerp(m.b, smooth(p / 0.6))
 			else
 				pos = m.b:Lerp(m.c, smooth((p - 0.6) / 0.4))
+			end
+			if not ANCHOR_HOLD then
+				root.AssemblyLinearVelocity = Vector3.zero
 			end
 			root.CFrame = CFrame.lookAt(pos, pos - m.n)
 			if p >= 1 then
