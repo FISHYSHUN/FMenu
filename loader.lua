@@ -43,6 +43,11 @@ local function fetch(url)
 		if res and res.StatusCode == 200 then
 			return res.Body
 		end
+		-- the token did not work: a public repo still loads without it
+		local okPlain, body = pcall(game.HttpGet, game, url)
+		if okPlain and type(body) == "string" and #body > 0 then
+			return body
+		end
 		error(("http %s (wrong token, or the token cannot read this repo)"):format(tostring(res and res.StatusCode)), 0)
 	end
 	return game:HttpGet(url)
