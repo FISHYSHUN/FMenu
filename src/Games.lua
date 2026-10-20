@@ -40,7 +40,17 @@ Games.index = {
 	-- check it with print(game.GameId) if the tab still does not show up)
 	rivals = { module = "games/Rivals", places = { 17625359962 }, universes = { 6035872082 }, names = { "rivals" } },
 	nds = { module = "games/NaturalDisasters", places = { 189707 }, names = { "natural disaster" } },
-	flee = { module = "games/FleeTheFacility", places = { 893973440, 17600423422 }, names = { "flee" } },
+	-- VC servers are a different place, so Flee is also recognised by its name and by what the game puts in the
+	-- player (probe), not only by place id. Run print(game.PlaceId, game.GameId) in a VC server to pin it exactly.
+	flee = {
+		module = "games/FleeTheFacility",
+		places = { 893973440, 17600423422 },
+		names = { "flee", "facility", "ftf" },
+		probe = function()
+			local lp = game:GetService("Players").LocalPlayer
+			return lp ~= nil and lp:WaitForChild("TempPlayerStatsModule", 1.5) ~= nil
+		end,
+	},
 }
 
 -- { header = "Title" } starts a titled section inside a tab (rows after it sit in their own 2 column grid)
@@ -215,6 +225,15 @@ local function matchGame(placeId, gameId, gameName)
 				if lname:find(pat, 1, true) then
 					return key
 				end
+			end
+		end
+	end
+	-- last resort: games that describe themselves with a probe (checks for objects only that game has)
+	for key, entry in pairs(Games.index) do
+		if entry.probe then
+			local ok, found = pcall(entry.probe)
+			if ok and found then
+				return key
 			end
 		end
 	end
