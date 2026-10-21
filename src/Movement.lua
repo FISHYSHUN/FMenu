@@ -37,6 +37,9 @@
 -- Hand IK (Parkour animations > "Hands reach ledge / wall"): while hanging both hands are placed on the ledge
 -- top, while mantling they stay planted until the body is up, while wall running the wall-side hand presses on
 -- the wall and a wall hop slaps both hands on it. The hang height comes from the rig's own arm length.
+-- Run styles (Sprint row): Pump, Sprinter (90 degree elbows, high knees) and Ninja (arms swept back), with stride,
+-- torso twist, lean, pump and cadence sliders. Wall run also tilts the BODY away from the wall (Body tilt slider),
+-- separate from the camera tilt.
 -- Custom animation IDs: the "Custom animation IDs" row takes one id per move (numbers only). A loaded track
 -- replaces that move's procedural pose. Roblox only lets a game play animations that its owner owns (or Roblox
 -- itself published), so most marketplace ids from other creators will not load; the menu then falls back to
@@ -87,12 +90,17 @@ Movement.tab = { name = "Parkour", rows = {
 		{ type = "choice", key = "key", label = "Sprint key", choices = { "Left Shift", "Left Control", "Q", "Always" }, default = "Left Shift" },
 		{ type = "slider", key = "lean", label = "Forward lean", min = 0, max = 1.5, step = 0.05, pct = true, default = 1 },
 		{ type = "slider", key = "pump", label = "Arm / leg pump", min = 0, max = 1.5, step = 0.05, pct = true, default = 1 },
+		{ type = "choice", key = "style", label = "Run style", choices = { "Pump", "Sprinter", "Ninja" }, default = "Pump" },
+		{ type = "slider", key = "stride", label = "Stride length", min = 0, max = 1.5, step = 0.05, pct = true, default = 1 },
+		{ type = "slider", key = "twist", label = "Torso twist", min = 0, max = 1.5, step = 0.05, pct = true, default = 0.5 },
+		{ type = "slider", key = "cadence", label = "Cadence", min = 0.5, max = 2, step = 0.05, unit = "x", default = 1 },
 		{ type = "slider", key = "fovKick", label = "FOV kick", min = 0, max = 25, step = 1, unit = " deg", default = 8 },
 	} },
 	{ header = "Walls" },
 	{ id = "pkWallRun", label = "Wall run", slider = "Max run time", value = 45, on = false, fmt = function(v) return ("%.1fs"):format(lerp(0.5, 4, v)) end, opts = {
 		{ type = "slider", key = "speed", label = "Run speed", min = 14, max = 60, step = 1, unit = " sp", default = 30 },
 		{ type = "slider", key = "tilt", label = "Camera tilt", min = 0, max = 20, step = 1, unit = " deg", default = 8 },
+		{ type = "slider", key = "bodyTilt", label = "Body tilt (away from wall)", min = 0, max = 45, step = 1, unit = " deg", default = 15 },
 		{ type = "toggle", key = "needKey", label = "Needs move key held", default = true },
 	} },
 	{ id = "pkWallJump", label = "Wall jump", slider = "Push power", value = 40, on = false, fmt = Util.range(20, 80, " sp"), opts = {
@@ -167,6 +175,7 @@ local S = {
 	run = nil, hang = nil, mantle = nil, flash = nil,
 	noWallUntil = 0, noGrabUntil = 0, lastRunPart = nil,
 	airJumps = 0, hops = 0,
+	upright = 0, -- seconds left of easing the body back upright after a tilted wall run
 	wasAir = false, fallV = 0, -- landing detection: was airborne last frame, fastest fall speed of this air time
 	sprintOn = false, sprintSet = nil, origWS = 16, phase = 0,
 	autoRotate = nil, anchored = false,
@@ -178,7 +187,7 @@ local function resetState()
 	S.state, S.run, S.hang, S.mantle, S.flash = "none", nil, nil, nil, nil
 	S.anchored, S.sprintOn, S.sprintSet, S.autoRotate = false, false, nil, nil
 	S.airJumps, S.hops, S.lastRunPart = 0, 0, nil
-	S.wasAir, S.fallV = false, 0
+	S.wasAir, S.fallV, S.upright = false, 0, 0
 end
 
 ---------------------------------------------------------------------
@@ -239,7 +248,9 @@ local function buildRig(char, hum)
 	if root and torso and rs and rig.joints.LeftShoulder then
 		local ua, la, hd = char:FindFirstChild("RightUpperArm"), char:FindFirstChild("RightLowerArm"), char:FindFirstChild("RightHand")
 		rig.torsoRel = root.CFrame:ToObjectSpace(torso.CFrame)
-		rig.armLen = (ua and ua.Size.Y or 1.2) + (la and la.Size.Y or 1.1) + (hd and hd.Size.Y * 0.5 or 0.2)
+		rig.upperLen = ua and ua.Size.Y or 1.2
+		rig.lowerLen = (la and la.Size.Y or 1.1) + (hd and hd.Size.Y * 0.5 or 0.2)
+		rig.armLen = rig.upperLen + rig.lowerLen
 		rig.hangDrop = math.clamp((rig.torsoRel * rs.c0).Position.Y + rig.armLen * 0.93, 2.5, 4.5) -- root height below the ledge
 	end
 	return rig
@@ -306,19 +317,52 @@ end
 
 -- R15 joint axes assumed: arm / leg forward = +X, outward arm = +Z (right) / -Z (left),
 -- torso forward lean = -X, knee / elbow bend = -X / +X.
-local function sprintPose(phase, lean, pump)
+-- o = the Sprint row's options: style, lean, pump, stride, twist (cadence is applied to the phase by the caller)
+local function sprintPose(phase, o)
+	local lean, pump = o.lean or 1, o.pump or 1
+	local stride, twist = o.stride or 1, o.twist or 0.5
+	local style = o.style or "Pump"
 	local t = {}
-	local s = math.sin(phase)
-	add(t, "Waist", -0.3 * lean)
-	add(t, "Neck", 0.2 * lean)
-	add(t, "RightElbow", 1.2 * pump)
-	add(t, "LeftElbow", 1.2 * pump)
-	add(t, "RightShoulder", s * 0.7 * pump)
-	add(t, "LeftShoulder", -s * 0.7 * pump)
-	add(t, "RightHip", -s * 0.5 * pump)
-	add(t, "LeftHip", s * 0.5 * pump)
-	add(t, "RightKnee", -0.9 * math.max(0, s) * pump)
-	add(t, "LeftKnee", -0.9 * math.max(0, -s) * pump)
+	local s, c = math.sin(phase), math.cos(phase)
+	-- torso rotates against the hips, the head stays roughly facing forward
+	add(t, "Waist", 0, c * 0.25 * twist, 0)
+	add(t, "Neck", 0, -c * 0.15 * twist, 0)
+	if style == "Ninja" then
+		-- arms swept straight back behind the body
+		add(t, "Waist", -0.55 * lean)
+		add(t, "Neck", 0.4 * lean)
+		add(t, "RightShoulder", -1.9 - s * 0.12 * pump, 0, 0.12)
+		add(t, "LeftShoulder", -1.9 + s * 0.12 * pump, 0, -0.12)
+		add(t, "RightElbow", 0.15)
+		add(t, "LeftElbow", 0.15)
+		add(t, "RightHip", -s * 0.55 * stride)
+		add(t, "LeftHip", s * 0.55 * stride)
+		add(t, "RightKnee", -1.0 * math.max(0, s) * stride)
+		add(t, "LeftKnee", -1.0 * math.max(0, -s) * stride)
+	elseif style == "Sprinter" then
+		-- tight 90 degree elbows, big arm drive, high knees
+		add(t, "Waist", -0.4 * lean)
+		add(t, "Neck", 0.25 * lean)
+		add(t, "RightElbow", 1.55)
+		add(t, "LeftElbow", 1.55)
+		add(t, "RightShoulder", s * 1.0 * pump)
+		add(t, "LeftShoulder", -s * 1.0 * pump)
+		add(t, "RightHip", -s * 0.75 * stride)
+		add(t, "LeftHip", s * 0.75 * stride)
+		add(t, "RightKnee", -1.2 * math.max(0, s) * stride)
+		add(t, "LeftKnee", -1.2 * math.max(0, -s) * stride)
+	else
+		add(t, "Waist", -0.3 * lean)
+		add(t, "Neck", 0.2 * lean)
+		add(t, "RightElbow", 1.2 * pump)
+		add(t, "LeftElbow", 1.2 * pump)
+		add(t, "RightShoulder", s * 0.7 * pump)
+		add(t, "LeftShoulder", -s * 0.7 * pump)
+		add(t, "RightHip", -s * 0.5 * stride)
+		add(t, "LeftHip", s * 0.5 * stride)
+		add(t, "RightKnee", -0.9 * math.max(0, s) * stride)
+		add(t, "LeftKnee", -0.9 * math.max(0, -s) * stride)
+	end
 	return t
 end
 
@@ -326,7 +370,7 @@ end
 local function runPose(phase, side)
 	local t = {}
 	local s = math.sin(phase * 1.4)
-	add(t, "Waist", -0.15, 0, 0.35 * side) -- top leans away from the wall
+	add(t, "Waist", -0.15, 0, 0.2 * side) -- top leans away from the wall (the body tilt does the rest)
 	add(t, "Neck", 0.15)
 	if side > 0 then
 		add(t, "RightShoulder", 0.3, 0, 1.3) -- wall side hand out against the wall
@@ -429,27 +473,65 @@ local function landPose(k)
 end
 
 ---------------------------------------------------------------------
--- hand IK: the shoulder is rotated to point the arm at a world position, the elbow bends by how much slack the
--- arm has. Joint-frame based (no assumed axes) except the elbow, which bends around +X like the other poses.
+-- hand IK, solved from the DISTANCE between the shoulder and what is being grabbed:
+--   too far  -> the arm straightens and points at it
+--   closer   -> law of cosines gives the elbow bend and how far the upper arm leans off the line to the target
+-- `pole` is the direction the elbow should point (down / outward for hanging, back for a wall run). The shoulder
+-- is twisted along the arm so the elbow's bend axis (+X, forearm swings forward) lies in that bend plane.
+-- Everything is worked out in the shoulder's own joint frame, so no rig axis has to be guessed except the
+-- elbow's +X flexion.
 ---------------------------------------------------------------------
-local function armIK(t, rig, root, side, target)
+local function armIK(t, rig, root, side, target, pole)
 	local j = rig.joints[side .. "Shoulder"]
-	if not (j and rig.torsoRel and target) then
+	if not (j and rig.torsoRel and rig.upperLen and target) then
 		return false
 	end
+	local Lu, Ll = rig.upperLen, rig.lowerLen
 	local frame = root.CFrame * rig.torsoRel * j.c0
 	local to = target - frame.Position
 	local d = to.Magnitude
 	if d < 0.05 then
 		return false
 	end
-	local dir = frame:VectorToObjectSpace(to / d)
+	local dir = to / d
+
+	local u, flex = dir, 0 -- upper arm direction (world), elbow flexion
+	if d < Lu + Ll - 1e-3 then
+		local dd = math.max(d, math.abs(Lu - Ll) + 1e-3)
+		local alpha = math.acos(math.clamp((Lu * Lu + dd * dd - Ll * Ll) / (2 * Lu * dd), -1, 1))
+		flex = math.pi - math.acos(math.clamp((Lu * Lu + Ll * Ll - dd * dd) / (2 * Lu * Ll), -1, 1))
+		local p = pole - dir * pole:Dot(dir)
+		if p.Magnitude < 1e-3 then
+			p = frame.UpVector - dir * frame.UpVector:Dot(dir)
+		end
+		p = p.Unit
+		u = dir * math.cos(alpha) + p * math.sin(alpha)
+	end
+
+	-- shoulder: minimal rotation taking the resting arm direction (down) to u, in the joint frame
 	local down = V3(0, -1, 0)
-	local dot = math.clamp(down:Dot(dir), -1, 1)
-	local axis = down:Cross(dir)
-	t[side .. "Shoulder"] = axis.Magnitude < 1e-4 and (dot > 0 and CFrame.new() or CFrame.Angles(math.pi, 0, 0))
+	local ul = frame:VectorToObjectSpace(u)
+	local dot = math.clamp(down:Dot(ul), -1, 1)
+	local axis = down:Cross(ul)
+	local r0 = axis.Magnitude < 1e-4 and (dot > 0 and CFrame.new() or CFrame.Angles(math.pi, 0, 0))
 		or CFrame.fromAxisAngle(axis.Unit, math.acos(dot))
-	t[side .. "Elbow"] = V3(math.min(math.acos(math.clamp(d / rig.armLen, 0, 1)) * 2, 0.8), 0, 0)
+
+	-- twist about the arm so the elbow bends toward the target
+	local rot = r0
+	if flex > 0.02 then
+		local elbowPos = frame.Position + u * Lu
+		local f = (target - elbowPos)
+		local a = u:Cross(f)
+		if a.Magnitude > 1e-4 then
+			a = a.Unit
+			local x0 = (frame * r0):VectorToWorldSpace(V3(1, 0, 0))
+			local armAxis = -u -- local +Y after r0 points back up the arm
+			local phi = math.atan2(armAxis:Dot(x0:Cross(a)), x0:Dot(a))
+			rot = r0 * CFrame.Angles(0, phi, 0)
+		end
+	end
+	t[side .. "Shoulder"] = rot
+	t[side .. "Elbow"] = V3(flex, 0, 0)
 	return true
 end
 
@@ -460,7 +542,9 @@ end
 
 -- both hands on a point, spread sideways along `right`
 local function reachBoth(t, rig, root, point, right, spread)
-	return armIK(t, rig, root, "Right", point + right * spread) and armIK(t, rig, root, "Left", point - right * spread)
+	-- elbows point down and outward
+	return armIK(t, rig, root, "Right", point + right * spread, V3(0, -1, 0) + right * 0.8)
+		and armIK(t, rig, root, "Left", point - right * spread, V3(0, -1, 0) - right * 0.8)
 end
 
 local function ikHangPose(clock, root, h)
@@ -498,7 +582,9 @@ local function ikRunPose(phase, side, root, r)
 	end
 	local t = runPose(phase, side)
 	local point = root.Position - r.normal * (r.dist or REACH) + r.tangent * 0.35 + UP * 0.4
-	return armIK(t, rig, root, side > 0 and "Right" or "Left", point) and t or nil
+	-- elbow points back and down, away from the wall
+	local pole = -r.tangent * 0.6 + V3(0, -0.6, 0) + r.normal * 0.3
+	return armIK(t, rig, root, side > 0 and "Right" or "Left", point, pole) and t or nil
 end
 
 -- both hands slap the wall in front and slide up it
@@ -625,6 +711,7 @@ end
 local function endRun(hum)
 	S.state, S.run = "none", nil
 	S.noWallUntil = os.clock() + COOLDOWN
+	S.upright = 0.4 -- ease the tilted body back upright
 	if S.autoRotate ~= nil and hum then
 		hum.AutoRotate = S.autoRotate
 	end
@@ -893,6 +980,15 @@ features.pkCore = {
 			S.state, S.hang, S.mantle = "none", nil, nil
 		end
 
+		-- after a tilted wall run: ease back to upright, keeping the facing direction
+		if S.upright > 0 and S.state == "none" then
+			S.upright -= dt
+			local look = flat(root.CFrame.LookVector)
+			if look.Magnitude > 0.01 then
+				root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, root.Position + look), 1 - math.exp(-dt * 14))
+			end
+		end
+
 		-- landing: remember the fastest fall of this air time, crouch when it ends hard
 		if air then
 			S.wasAir = true
@@ -987,7 +1083,9 @@ features.pkCore = {
 				local speed = cfg.run.o.speed or 30
 				local p = r.t / r.dur
 				root.AssemblyLinearVelocity = tg * speed + UP * (5 - 9 * p) - r.normal * 2
-				local face = CFrame.lookAt(root.Position, root.Position + tg)
+				-- the whole body leans away from the wall (positive roll = top to the left, so wall on the right = +)
+				local roll = math.rad(cfg.run.o.bodyTilt or 0) * r.side
+				local face = CFrame.lookAt(root.Position, root.Position + tg) * CFrame.Angles(0, 0, roll)
 				root.CFrame = root.CFrame:Lerp(face, 1 - math.exp(-dt * 12))
 				S.phase += dt * speed * 0.6
 			end
@@ -1099,8 +1197,8 @@ features.pkCore = {
 			elseif kind == "leap" then
 				pose = leapPose(cfg.sprint.o.lean or 1, cfg.sprint.o.pump or 1)
 			elseif kind == "sprint" then
-				S.phase += dt * hv * 0.55
-				pose = sprintPose(S.phase, cfg.sprint.o.lean or 1, cfg.sprint.o.pump or 1)
+				S.phase += dt * hv * 0.55 * (cfg.sprint.o.cadence or 1)
+				pose = sprintPose(S.phase, cfg.sprint.o)
 			end
 			if override then
 				stopTracks(hum) -- the game's animation would fight the pose
