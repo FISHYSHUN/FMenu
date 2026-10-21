@@ -266,8 +266,15 @@ local function buildRig(char, hum)
 				end
 			end
 			-- R6 has no waist: the root joint (root part -> torso) stands in for it, so lean / twist move the whole torso
-			local rj = root:FindFirstChild("RootJoint")
-			if rj and rj:IsA("Motor6D") and not rig.joints.Waist then
+			-- whatever joint holds the torso to the root part (usually Motor6D "RootJoint", custom rigs may use a Weld)
+			local rj
+			for _, d in ipairs(root:GetChildren()) do
+				if d:IsA("JointInstance") and d.Part1 == torso then
+					rj = d
+					break
+				end
+			end
+			if rj and not rig.joints.Waist then
 				rig.joints.Waist = { m = rj, c0 = rj.C0, c0rot = rj.C0 - rj.C0.Position, cur = Vector3.zero, curR = CFrame.new(), dirty = false }
 				rig.n += 1
 			end
@@ -1363,8 +1370,15 @@ features.pkCore = {
 
 		if DEBUG and kind and kind ~= S.dbgKind and now - (S.dbgAt or 0) > 1 and S.ctx then
 			S.dbgAt = now
-			S.ctx.notify(("parkour dbg: %s | joints %d | strength %.2f | anim row %s"):format(
-				kind, S.rig and S.rig.n or 0, lerp(0, 1.5, cfg.anim.v), tostring(cfg.anim.on)), Color3.fromRGB(120, 200, 255))
+			local names = {}
+			if S.rig then
+				for k in pairs(S.rig.joints) do
+					names[#names + 1] = k
+				end
+				table.sort(names)
+			end
+			S.ctx.notify(("parkour dbg: %s | joints %d (%s) | strength %.2f | anim row %s"):format(
+				kind, S.rig and S.rig.n or 0, table.concat(names, ","), lerp(0, 1.5, cfg.anim.v), tostring(cfg.anim.on)), Color3.fromRGB(120, 200, 255))
 		end
 		S.dbgKind = kind
 
