@@ -37,6 +37,9 @@
 -- Hand IK (Parkour animations > "Hands reach ledge / wall"): while hanging both hands are placed on the ledge
 -- top, while mantling they stay planted until the body is up, while wall running the wall-side hand presses on
 -- the wall and a wall hop slaps both hands on it. The hang height comes from the rig's own arm length.
+-- Ledge shimmy: while hanging, A / D (the sideways part of the move input) moves you along the ledge with the
+-- hands going over each other. It stops at the end of the ledge (no corner wrapping). Hand spread is a slider.
+-- R6 characters: the hands reach ledges and walls too (shoulders only), the body poses stay R15 only.
 -- Run styles (Sprint row): Pump, Sprinter (90 degree elbows, high knees) and Ninja (arms swept back), with stride,
 -- torso twist, lean, pump and cadence sliders. Wall run also tilts the BODY away from the wall (Body tilt slider),
 -- separate from the camera tilt.
@@ -67,6 +70,7 @@ local V3 = Vector3.new
 local REACH = 3.2 -- studs from the root part to a wall that still counts as touching it
 local GRAB_REACH = 3.4 -- how far ahead a ledge is looked for
 local RUN_MIN_SPEED = 8 -- horizontal speed needed to start a wall run
+local HANG_OFF = 0.8 -- studs between the wall and the root part while hanging
 local COOLDOWN = 0.35 -- seconds before a wall can be used again after a wall run / jump
 local CAM_BIND = "FMenuParkourCam"
 -- true  = the root part is Anchored while hanging / mantling (stable, but a client can't replicate an anchored part,
@@ -117,6 +121,9 @@ Movement.tab = { name = "Parkour", rows = {
 		{ type = "toggle", key = "wToClimb", label = "Hold forward to climb", default = false },
 		{ type = "slider", key = "hangTime", label = "Max hang time", min = 2, max = 30, step = 1, unit = "s", default = 12 },
 		{ type = "slider", key = "speed", label = "Mantle speed", min = 0.5, max = 2, step = 0.1, unit = "x", default = 1 },
+		{ type = "toggle", key = "shimmy", label = "Move along ledge (A / D)", default = true },
+		{ type = "slider", key = "shimmySpeed", label = "Ledge move speed", min = 2, max = 16, step = 1, unit = " st/s", default = 6 },
+		{ type = "slider", key = "spread", label = "Hand spread", min = 0.3, max = 1.3, step = 0.05, unit = " st", default = 0.7 },
 	} },
 	{ header = "Visuals" },
 	{ id = "pkAnim", label = "Parkour animations", slider = "Pose strength", value = 67, on = true, fmt = Util.range(0, 150, "%"), opts = {
@@ -235,6 +242,29 @@ local R15 = { "Waist", "Neck", "RightShoulder", "LeftShoulder", "RightElbow", "L
 
 local function buildRig(char, hum)
 	local rig = { joints = {}, n = 0 }
+	if hum.RigType == Enum.HumanoidRigType.R6 then
+		-- R6: only the two shoulders are driven (by the hand IK). Its joint axes differ from R15, so the euler
+		-- poses are not used on it and there is no elbow.
+		local root, torso, ra = char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Torso"), char:FindFirstChild("Right Arm")
+		if root and torso then
+			for _, d in ipairs(torso:GetChildren()) do
+				local name = d:IsA("Motor6D") and (d.Name == "Right Shoulder" and "RightShoulder" or d.Name == "Left Shoulder" and "LeftShoulder")
+				if name and not rig.joints[name] then
+					rig.joints[name] = { m = d, c0 = d.C0, cur = Vector3.zero, curR = CFrame.new(), dirty = false }
+					rig.n += 1
+				end
+			end
+			if rig.joints.RightShoulder and rig.joints.LeftShoulder then
+				rig.r6, rig.noElbow = true, true
+				rig.torsoRel = root.CFrame:ToObjectSpace(torso.CFrame)
+				rig.upperLen = (ra and ra.Size.Y or 2) * 0.8
+				rig.lowerLen = 0.05
+				rig.armLen = rig.upperLen
+				rig.hangDrop = math.clamp((rig.torsoRel * rig.joints.RightShoulder.c0).Position.Y + rig.armLen * 0.85, 1.8, 4.5)
+			end
+		end
+		return rig
+	end
 	if hum.RigType ~= Enum.HumanoidRigType.R15 then
 		return rig
 	end
@@ -256,7 +286,7 @@ local function buildRig(char, hum)
 		rig.upperLen = ua and ua.Size.Y or 1.2
 		rig.lowerLen = (la and la.Size.Y or 1.1) + (hd and hd.Size.Y * 0.5 or 0.2)
 		rig.armLen = rig.upperLen + rig.lowerLen
-		rig.hangDrop = math.clamp((rig.torsoRel * rs.c0).Position.Y + rig.armLen * 0.93, 2.5, 4.5) -- root height below the ledge
+		rig.hangDrop = math.clamp((rig.torsoRel * rs.c0).Position.Y + rig.armLen * 0.85, 1.8, 4.5) -- root height below the ledge
 	end
 	return rig
 end
@@ -282,6 +312,9 @@ local function applyPose(dt, targets, strength, speed)
 	for name, j in pairs(rig.joints) do
 		if j.m.Parent then
 			local t = targets and targets[name]
+			if rig.r6 and typeof(t) ~= "CFrame" then
+				t = nil -- euler poses are written for R15 axes
+			end
 			if typeof(t) == "CFrame" then
 				j.curR = j.curR:Lerp(ident:Lerp(t, math.min(strength, 1)), k)
 				j.cur = j.cur:Lerp(Vector3.zero, k)
@@ -501,7 +534,7 @@ local function armIK(t, rig, root, side, target, pole)
 	local dir = to / d
 
 	local u, flex = dir, 0 -- upper arm direction (world), elbow flexion
-	if d < Lu + Ll - 1e-3 then
+	if not rig.noElbow and d < Lu + Ll - 1e-3 then
 		local dd = math.max(d, math.abs(Lu - Ll) + 1e-3)
 		local alpha = math.acos(math.clamp((Lu * Lu + dd * dd - Ll * Ll) / (2 * Lu * dd), -1, 1))
 		flex = math.pi - math.acos(math.clamp((Lu * Lu + Ll * Ll - dd * dd) / (2 * Lu * Ll), -1, 1))
@@ -536,7 +569,9 @@ local function armIK(t, rig, root, side, target, pole)
 		end
 	end
 	t[side .. "Shoulder"] = rot
-	t[side .. "Elbow"] = V3(flex, 0, 0)
+	if not rig.noElbow then
+		t[side .. "Elbow"] = V3(flex, 0, 0)
+	end
 	return true
 end
 
@@ -562,7 +597,16 @@ local function ikHangPose(clock, root, h)
 	if right.Magnitude < 0.01 then
 		return nil
 	end
-	return reachBoth(t, rig, root, h.grip, right.Unit, 0.65) and t or nil
+	right = right.Unit
+	-- while moving along the ledge the hands go over each other: each one reaches further out in turn
+	local spread = cfg.mantle.o.spread or 0.7
+	local sw = 0.3 * (h.mv or 0)
+	local ph = h.ph or 0
+	local rr = spread + sw * math.sin(ph)
+	local rl = spread + sw * math.sin(ph + math.pi)
+	local ok = armIK(t, rig, root, "Right", h.grip + right * rr, V3(0, -1, 0) + right * 0.8)
+		and armIK(t, rig, root, "Left", h.grip - right * rl, V3(0, -1, 0) - right * 0.8)
+	return ok and t or nil
 end
 
 -- hands stay planted on the ledge while the body is pulled up, then the euler pose pushes off it
@@ -576,7 +620,7 @@ local function ikMantlePose(p, root, m)
 	if right.Magnitude < 0.01 then
 		return nil
 	end
-	return reachBoth(t, rig, root, m.grip, right.Unit, 0.65) and t or nil
+	return reachBoth(t, rig, root, m.grip, right.Unit, cfg.mantle.o.spread or 0.7) and t or nil
 end
 
 -- the hand on the wall side is pressed against the wall
@@ -695,12 +739,12 @@ local function refreshChar()
 	end
 	local root = Util.rootOf(char)
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if char and hum and (not S.rig or (S.rig.n == 0 and os.clock() >= S.rigRetry and hum.RigType == Enum.HumanoidRigType.R15)) then
+	if char and hum and (not S.rig or (S.rig.n == 0 and os.clock() >= S.rigRetry and hum.RigType ~= Enum.HumanoidRigType.R6 and hum.RigType == Enum.HumanoidRigType.R15)) then
 		S.rig = buildRig(char, hum)
 		S.rigRetry = os.clock() + 0.5
-		if hum.RigType ~= Enum.HumanoidRigType.R15 and not S.warnedRig and S.ctx then
+		if hum.RigType == Enum.HumanoidRigType.R6 and not S.warnedRig and S.ctx then
 			S.warnedRig = true
-			S.ctx.notify("parkour: R6 character, movement works but there are no body poses", Color3.fromRGB(255, 214, 64))
+			S.ctx.notify("parkour: R6 character, hands reach ledges and walls but the body poses are R15 only", Color3.fromRGB(255, 214, 64))
 		end
 	end
 	return char, root, hum
@@ -831,8 +875,8 @@ local function tryGrab(root, hum)
 		return -- no room to stand on it
 	end
 	local drop = S.rig and S.rig.hangDrop or 2.5 -- arms reach the ledge with the rig's own proportions
-	local target = V3(hit.Position.X, ledgeY - drop, hit.Position.Z) + n * 1.0
-	local grip = V3(hit.Position.X, ledgeY + 0.05, hit.Position.Z) - n * 0.25 -- where the hands go
+	local target = V3(hit.Position.X, ledgeY - drop, hit.Position.Z) + n * HANG_OFF
+	local grip = V3(hit.Position.X, ledgeY + 0.05, hit.Position.Z) - n * 0.1 -- the lip of the ledge, where the hands go
 	root.AssemblyLinearVelocity = Vector3.zero
 	if ANCHOR_HOLD then
 		root.Anchored = true
@@ -844,8 +888,35 @@ local function tryGrab(root, hum)
 		cf = cf, n = n, ledgeY = ledgeY, part = hit.Instance, t = 0, from = root.CFrame, wHold = 0,
 		rel = hit.Instance.CFrame:ToObjectSpace(cf), -- grab point in the wall's space, so moving platforms carry you
 		grip = grip, gripRel = hit.Instance.CFrame:ToObjectSpace(CFrame.new(grip)),
+		drop = drop, mv = 0, ph = 0, -- drop = root height under the ledge; mv / ph drive the hand-over-hand while moving
 	}
 	S.airJumps, S.hops = 0, 0
+end
+
+-- moves the hang point `dist` studs along the ledge (dirv = unit vector along it). The ledge top and the wall
+-- are probed a little ahead of the hands, so it stops at the end of the ledge (corners are not wrapped) and
+-- follows gentle bends and small steps. Returns false when there is nothing to hold ahead.
+local function shimmy(h, dirv, dist)
+	local ahead = 0.45
+	local gp = h.grip + dirv * (dist + ahead)
+	local top = workspace:Raycast(gp - h.n * 0.3 + UP * 1.5, V3(0, -3, 0), Util.rayParams())
+	if not top or not top.Instance.CanCollide or top.Normal.Y < 0.8 or math.abs(top.Position.Y - h.ledgeY) > 0.7 or Util.playerFromPart(top.Instance) then
+		return false
+	end
+	local wall = cast(V3(gp.X, top.Position.Y - 1.2, gp.Z) + h.n * 1.0, -h.n, 2.0)
+	if not wall then
+		return false
+	end
+	local n = flatNormal(wall)
+	local ledgeY = top.Position.Y
+	local back = dirv * ahead
+	local pos = V3(wall.Position.X - back.X, ledgeY - h.drop, wall.Position.Z - back.Z) + n * HANG_OFF
+	local grip = V3(wall.Position.X - back.X, ledgeY + 0.05, wall.Position.Z - back.Z) - n * 0.1
+	local cf = CFrame.lookAt(pos, pos - n)
+	h.n, h.ledgeY, h.cf, h.grip = n, ledgeY, cf, grip
+	h.rel = h.part.CFrame:ToObjectSpace(cf)
+	h.gripRel = h.part.CFrame:ToObjectSpace(CFrame.new(grip))
+	return true
 end
 
 local function onJump()
@@ -1107,6 +1178,25 @@ features.pkCore = {
 					h.n = n.Unit
 				end
 			end
+			-- move along the ledge with the sideways part of the move input
+			local o0 = cfg.mantle.o
+			local want = 0
+			if o0.shimmy ~= false and h.t >= 0.15 then
+				local rightDir = (-h.n):Cross(UP)
+				if rightDir.Magnitude > 0.01 then
+					local side = hum.MoveDirection:Dot(rightDir.Unit)
+					if math.abs(side) > 0.35 then
+						want = side > 0 and 1 or -1
+						local sp = o0.shimmySpeed or 6
+						if shimmy(h, rightDir.Unit * want, sp * dt) then
+							h.ph += dt * sp * 2.2
+						else
+							want = 0 -- end of the ledge
+						end
+					end
+				end
+			end
+			h.mv += ((want ~= 0 and 1 or 0) - h.mv) * (1 - math.exp(-dt * 10))
 			if not ANCHOR_HOLD then
 				root.AssemblyLinearVelocity = Vector3.zero
 			end
