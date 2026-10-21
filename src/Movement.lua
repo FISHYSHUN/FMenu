@@ -7,7 +7,7 @@
 --   Movement.features  { id = { set, step, ... } }, merged into Functionality's registry
 --
 -- How it works
---   One controller (pkCore) runs every frame and owns a tiny state machine: none / run / hang / mantle.
+--   One controller (pkCore) runs every frame and owns a tiny state machine: none / run / hang / mantle / launch.
 --   The six rows only switch capabilities on and off and carry their settings, they hold no logic of their own.
 --   Inputs: UserInputService.JumpRequest (keyboard, gamepad and the mobile jump button) plus the humanoid's
 --   MoveDirection, so there are no fixed keys except the sprint key and Left Control (let go of a ledge).
@@ -21,11 +21,14 @@
 --              air time. Wins over the wall jump when you face the wall.
 --   hang       falling at a ledge: grabs it and holds you there. Jump (or hold forward, option) = mantle up,
 --              hold back or Left Control = drop.
+--   mantle     pulls you up to chest height on the ledge, then pops you into the air with an upward velocity
+--              (sized from workspace.Gravity) and pushes you forward once your feet clear the ledge, so you
+--              hop onto the surface instead of sliding onto it. State "launch" covers that last bit.
 --
--- Animations: no asset ids are used. The character's Motor6D C0 values are offset by smoothed angles, which
--- the Animator never overwrites. Sprint is added on top of the game's run animation; wall run, hang, mantle
--- and the kick / hop poses stop the game's animation tracks and pose the body themselves. R15 only (R6
--- characters still get the movement, just no pose).
+-- Animations: the character's Motor6D C0 values are offset by smoothed angles, which the Animator never
+-- overwrites. Sprint is added on top of the game's run animation; wall run, hang, mantle and the kick / hop
+-- poses stop the game's animation tracks and pose the body themselves. R15 only (R6 characters still get the
+-- movement, just no pose).
 -- The pose angles are written from the R15 rig's joint axes (arms forward = +X, torso forward lean = -X,
 -- knees bend = -X) and were NOT tested on a live character: if a limb swings the wrong way, flip the sign in
 -- the pose function (sprintPose / runPose / hangPose / mantlePose / kickPose / hopPose).
@@ -34,23 +37,25 @@
 -- hard fall (scaled by impact speed). Both are layered on top of the game's own animation instead of replacing
 -- it, so walking / running keeps animating. Each has its own toggle in the row's right-click menu.
 --
--- Hand IK (Parkour animations > "Hands reach ledge / wall"): while hanging both hands are placed on the ledge
--- top, while mantling they stay planted until the body is up, while wall running the wall-side hand presses on
--- the wall and a wall hop slaps both hands on it. The hang height comes from the rig's own arm length.
+-- Hand + foot IK (Parkour animations > "Hands reach ledge / wall"): while hanging both hands are placed on the
+-- ledge top, while mantling they stay planted until the body is up, a wall hop slaps both hands on the wall.
+-- While wall running the wall-side hand presses on the wall and slides with the stride, and BOTH feet step on
+-- the wall: the planted foot sits on the wall surface, the swinging foot lifts off and moves forward. Legs use
+-- the same solver as the arms (thigh / shin lengths measured from the rig, knee points forward and away from
+-- the wall). The hang height comes from the rig's own arm length.
 -- Ledge shimmy: while hanging, A / D (the sideways part of the move input) moves you along the ledge with the
 -- hands going over each other. It stops at the end of the ledge (no corner wrapping). Hand spread is a slider.
--- R6 characters: the hands reach ledges and walls too (shoulders only), the body poses stay R15 only.
+-- R6 characters: the hands reach ledges and walls too (shoulders only), the body poses and leg IK stay R15 only.
 -- Run styles (Sprint row): Pump, Sprinter (90 degree elbows, high knees) and Ninja (arms swept back), with stride,
 -- torso twist, lean, pump and cadence sliders. Wall run also tilts the BODY away from the wall (Body tilt slider),
 -- separate from the camera tilt.
--- Custom animation IDs: the "Custom animation IDs" row takes one id per move (numbers only). A loaded track
--- replaces that move's procedural pose. Roblox only lets a game play animations that its owner owns (or Roblox
--- itself published), so most marketplace ids from other creators will not load; the menu then falls back to
--- the procedural pose and says so after 2 s. One-shot moves (wall jump, hop, mantle, landing) are stretched
--- to the move's length.
+-- Custom animation ID: the "Custom wall run animation ID" row takes one id (numbers only) for the wall run. A
+-- loaded track replaces the procedural wall run pose. Roblox only lets a game play animations that its owner
+-- owns (or Roblox itself published), so most marketplace ids from other creators will not load; the menu then
+-- falls back to the procedural pose and says so after 2 s.
 --
--- Anchoring: while hanging and mantling the root part is Anchored (released when you drop, mantle ends, the
--- row is turned off or the menu is destroyed). Games with movement anti-cheat may rubber-band any of this.
+-- Anchoring: while hanging and mantling the root part is Anchored (released when you drop, the mantle pops you
+-- up, the row is turned off or the menu is destroyed). Games with movement anti-cheat may rubber-band any of this.
 
 local import = ...
 local Util = import("Util")
@@ -73,6 +78,8 @@ local RUN_MIN_SPEED = 8 -- horizontal speed needed to start a wall run
 local HANG_OFF = 0.8 -- studs between the wall and the root part while hanging
 local COOLDOWN = 0.35 -- seconds before a wall can be used again after a wall run / jump
 local CAM_BIND = "FMenuParkourCam"
+local MANTLE_PULL = 0.35 -- seconds of the scripted pull up before the mantle pops you into the air
+local MANTLE_FWD = 12 -- studs/s pushed toward the ledge once the feet have cleared it
 -- true  = the root part is Anchored while hanging / mantling (stable, but a client can't replicate an anchored part,
 --         so other players may see you frozen until you let go).
 -- false = nothing is anchored: velocity is zeroed and the CFrame re-set every frame instead (replicates normally,
@@ -132,17 +139,10 @@ Movement.tab = { name = "Parkour", rows = {
 		{ type = "slider", key = "smooth", label = "Smoothing", min = 4, max = 20, step = 1, default = 10 },
 		{ type = "toggle", key = "landing", label = "Landing crouch", default = true },
 		{ type = "toggle", key = "leap", label = "Sprint leap pose", default = true },
-		{ type = "toggle", key = "ik", label = "Hands reach ledge / wall (IK)", default = true },
+		{ type = "toggle", key = "ik", label = "Hands + feet reach ledge / wall (IK)", default = true },
 	} },
-	{ id = "pkCustom", label = "Custom animation IDs", slider = "Unused", value = 0, on = false, opts = {
-		{ type = "text", key = "idSprint", label = "Sprint", placeholder = "animation id (numbers)", default = "" },
-		{ type = "text", key = "idLeap", label = "Sprint leap", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idRun", label = "Wall run", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idKick", label = "Wall jump", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idHop", label = "Wall hop", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idHang", label = "Ledge hang", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idMantle", label = "Mantle", placeholder = "animation id", default = "" },
-		{ type = "text", key = "idLand", label = "Landing", placeholder = "animation id", default = "" },
+	{ id = "pkCustom", label = "Custom wall run animation ID", slider = "Unused", value = 0, on = false, opts = {
+		{ type = "text", key = "idRun", label = "Wall run", placeholder = "animation id (numbers)", default = "" },
 	} },
 } }
 
@@ -179,9 +179,9 @@ bind("pkCustom", "custom")
 -- state
 ---------------------------------------------------------------------
 local S = {
-	char = nil, rig = nil, rigRetry = 0, warnedRig = false,
-	state = "none", -- none / run / hang / mantle
-	run = nil, hang = nil, mantle = nil, flash = nil,
+	char = nil, rig = nil, rigRetry = 0, rigTries = 0, warnedRig = false,
+	state = "none", -- none / run / hang / mantle / launch
+	run = nil, hang = nil, mantle = nil, launch = nil, flash = nil,
 	noWallUntil = 0, noGrabUntil = 0, lastRunPart = nil,
 	airJumps = 0, hops = 0,
 	cyc = 0, -- 0..1 fade-in of the running cycle (the cycle itself must not be low-pass filtered)
@@ -194,7 +194,7 @@ local S = {
 }
 
 local function resetState()
-	S.state, S.run, S.hang, S.mantle, S.flash = "none", nil, nil, nil, nil
+	S.state, S.run, S.hang, S.mantle, S.launch, S.flash = "none", nil, nil, nil, nil, nil
 	S.anchored, S.sprintOn, S.sprintSet, S.autoRotate = false, false, nil, nil
 	S.airJumps, S.hops, S.lastRunPart = 0, 0, nil
 	S.wasAir, S.fallV, S.upright = false, 0, 0
@@ -281,7 +281,7 @@ local function buildRig(char, hum)
 			rig.n += 1
 		end
 	end
-	-- geometry for the hand IK, measured from this character's own (possibly scaled) rig
+	-- geometry for the hand / foot IK, measured from this character's own (possibly scaled) rig
 	local root, torso, rs = char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("UpperTorso"), rig.joints.RightShoulder
 	if root and torso and rs and rig.joints.LeftShoulder then
 		local ua, la, hd = char:FindFirstChild("RightUpperArm"), char:FindFirstChild("RightLowerArm"), char:FindFirstChild("RightHand")
@@ -290,6 +290,13 @@ local function buildRig(char, hum)
 		rig.lowerLen = (la and la.Size.Y or 1.1) + (hd and hd.Size.Y * 0.5 or 0.2)
 		rig.armLen = rig.upperLen + rig.lowerLen
 		rig.hangDrop = math.clamp((rig.torsoRel * rs.c0).Position.Y + rig.armLen * 0.85, 1.8, 4.5) -- root height below the ledge
+	end
+	local lt = char:FindFirstChild("LowerTorso")
+	local ul, ll, ft = char:FindFirstChild("RightUpperLeg"), char:FindFirstChild("RightLowerLeg"), char:FindFirstChild("RightFoot")
+	if root and lt and rig.joints.RightHip and rig.joints.LeftHip then
+		rig.lowerRel = root.CFrame:ToObjectSpace(lt.CFrame)
+		rig.thighLen = ul and ul.Size.Y or 1.2
+		rig.shinLen = (ll and ll.Size.Y or 1.2) + (ft and ft.Size.Y * 0.5 or 0.1)
 	end
 	return rig
 end
@@ -516,21 +523,18 @@ local function landPose(k)
 end
 
 ---------------------------------------------------------------------
--- hand IK, solved from the DISTANCE between the shoulder and what is being grabbed:
---   too far  -> the arm straightens and points at it
---   closer   -> law of cosines gives the elbow bend and how far the upper arm leans off the line to the target
--- `pole` is the direction the elbow should point (down / outward for hanging, back for a wall run). The shoulder
--- is twisted along the arm so the elbow's bend axis (+X, forearm swings forward) lies in that bend plane.
--- Everything is worked out in the shoulder's own joint frame, so no rig axis has to be guessed except the
--- elbow's +X flexion.
+-- limb IK (arms and legs), solved from the DISTANCE between the joint and what is being reached:
+--   too far  -> the limb straightens and points at it
+--   closer   -> law of cosines gives the middle joint's bend and how far the upper part leans off the line
+-- `pole` is the direction the elbow / knee should point. The top joint is twisted along the limb so the middle
+-- joint's bend axis (X) lies in that bend plane. Everything is worked out in the top joint's own frame, so no
+-- rig axis has to be guessed except the bend axis: elbow flexes +X (forearm swings forward), knee flexes -X
+-- (shin swings back), which is what `sign` carries.
 ---------------------------------------------------------------------
-local function armIK(t, rig, root, side, target, pole)
-	local j = rig.joints[side .. "Shoulder"]
-	if not (j and rig.torsoRel and rig.upperLen and target) then
+local function limbIK(t, frame, jointName, lowerName, Lu, Ll, target, pole, sign, noLower)
+	if not target then
 		return false
 	end
-	local Lu, Ll = rig.upperLen, rig.lowerLen
-	local frame = root.CFrame * rig.torsoRel * j.c0
 	local to = target - frame.Position
 	local d = to.Magnitude
 	if d < 0.05 then
@@ -538,8 +542,8 @@ local function armIK(t, rig, root, side, target, pole)
 	end
 	local dir = to / d
 
-	local u, flex = dir, 0 -- upper arm direction (world), elbow flexion
-	if not rig.noElbow and d < Lu + Ll - 1e-3 then
+	local u, flex = dir, 0 -- upper limb direction (world), middle joint flexion
+	if not noLower and d < Lu + Ll - 1e-3 then
 		local dd = math.max(d, math.abs(Lu - Ll) + 1e-3)
 		local alpha = math.acos(math.clamp((Lu * Lu + dd * dd - Ll * Ll) / (2 * Lu * dd), -1, 1))
 		flex = math.pi - math.acos(math.clamp((Lu * Lu + Ll * Ll - dd * dd) / (2 * Lu * Ll), -1, 1))
@@ -551,7 +555,7 @@ local function armIK(t, rig, root, side, target, pole)
 		u = dir * math.cos(alpha) + p * math.sin(alpha)
 	end
 
-	-- shoulder: minimal rotation taking the resting arm direction (down) to u, in the joint frame
+	-- top joint: minimal rotation taking the resting limb direction (down) to u, in the joint frame
 	local down = V3(0, -1, 0)
 	local ul = frame:VectorToObjectSpace(u)
 	local dot = math.clamp(down:Dot(ul), -1, 1)
@@ -559,25 +563,40 @@ local function armIK(t, rig, root, side, target, pole)
 	local r0 = axis.Magnitude < 1e-4 and (dot > 0 and CFrame.new() or CFrame.Angles(math.pi, 0, 0))
 		or CFrame.fromAxisAngle(axis.Unit, math.acos(dot))
 
-	-- twist about the arm so the elbow bends toward the target
+	-- twist about the limb so the middle joint bends toward the target
 	local rot = r0
 	if flex > 0.02 then
-		local elbowPos = frame.Position + u * Lu
-		local f = (target - elbowPos)
-		local a = u:Cross(f)
+		local midPos = frame.Position + u * Lu
+		local a = u:Cross(target - midPos)
 		if a.Magnitude > 1e-4 then
-			a = a.Unit
+			a = a.Unit * sign -- the knee bends -X, so its bend axis is the flipped one
 			local x0 = (frame * r0):VectorToWorldSpace(V3(1, 0, 0))
-			local armAxis = -u -- local +Y after r0 points back up the arm
+			local armAxis = -u -- local +Y after r0 points back up the limb
 			local phi = math.atan2(armAxis:Dot(x0:Cross(a)), x0:Dot(a))
 			rot = r0 * CFrame.Angles(0, phi, 0)
 		end
 	end
-	t[side .. "Shoulder"] = rot
-	if not rig.noElbow then
-		t[side .. "Elbow"] = V3(flex, 0, 0)
+	t[jointName] = rot
+	if not noLower then
+		t[lowerName] = V3(flex * sign, 0, 0)
 	end
 	return true
+end
+
+local function armIK(t, rig, root, side, target, pole)
+	local j = rig.joints[side .. "Shoulder"]
+	if not (j and rig.torsoRel and rig.upperLen and target) then
+		return false
+	end
+	return limbIK(t, root.CFrame * rig.torsoRel * j.c0, side .. "Shoulder", side .. "Elbow", rig.upperLen, rig.lowerLen, target, pole, 1, rig.noElbow == true)
+end
+
+local function legIK(t, rig, root, side, target, pole)
+	local j = rig.joints[side .. "Hip"]
+	if not (j and rig.lowerRel and rig.thighLen and target) then
+		return false
+	end
+	return limbIK(t, root.CFrame * rig.lowerRel * j.c0, side .. "Hip", side .. "Knee", rig.thighLen, rig.shinLen, target, pole, -1, false)
 end
 
 local function ikReady()
@@ -614,10 +633,10 @@ local function ikHangPose(clock, root, h)
 	return ok and t or nil
 end
 
--- hands stay planted on the ledge while the body is pulled up, then the euler pose pushes off it
+-- hands stay planted on the ledge while the body is pulled up
 local function ikMantlePose(p, root, m)
 	local rig = ikReady()
-	if not (rig and m.grip) or p >= 0.6 then
+	if not (rig and m.grip) or p >= 0.9 then
 		return nil
 	end
 	local t = mantlePose(p)
@@ -628,17 +647,41 @@ local function ikMantlePose(p, root, m)
 	return reachBoth(t, rig, root, m.grip, right.Unit, cfg.mantle.o.spread or 0.7) and t or nil
 end
 
--- the hand on the wall side is pressed against the wall
+-- wall run: the wall-side hand presses on the wall and slides with the stride, both feet step on the wall.
+-- A foot is planted on the wall surface while it moves back relative to the body, then lifts off the wall and
+-- swings forward (lift = the swing half of the cycle).
 local function ikRunPose(phase, side, root, r, o)
 	local rig = ikReady()
 	if not rig then
 		return nil
 	end
 	local t = runPose(phase, side, o)
-	local point = root.Position - r.normal * (r.dist or REACH) + r.tangent * 0.35 + UP * 0.4
+	t.Waist = nil -- the IK frames assume an unbent torso
+	local n, tg = r.normal, r.tangent
+	local surf = root.Position - n * (r.dist or REACH) -- wall point at root height
+	local ph = phase * 1.4 * (o.cadence or 1)
+
 	-- elbow points back and down, away from the wall
-	local pole = -r.tangent * 0.6 + V3(0, -0.6, 0) + r.normal * 0.3
-	return armIK(t, rig, root, side > 0 and "Right" or "Left", point, pole) and t or nil
+	local hand = surf + n * 0.1 + tg * (0.35 + 0.3 * math.cos(ph)) + UP * 0.4
+	armIK(t, rig, root, side > 0 and "Right" or "Left", hand, -tg * 0.6 + V3(0, -0.6, 0) + n * 0.3)
+
+	if rig.lowerRel and rig.thighLen then
+		local reach = rig.thighLen + rig.shinLen
+		local stride = (o.stride or 1) * 0.9
+		for _, leg in ipairs({ "Right", "Left" }) do
+			local j = rig.joints[leg .. "Hip"]
+			if j then
+				local pp = ph + (leg == "Right" and 0 or math.pi)
+				local lift = math.max(0, -math.sin(pp))
+				local hip = (root.CFrame * rig.lowerRel * j.c0).Position
+				local foot = V3(surf.X, hip.Y - reach * 0.82 + lift * 0.5, surf.Z)
+					+ n * (0.15 + lift * 0.8) + tg * (stride * math.cos(pp))
+				-- knee points forward and away from the wall
+				legIK(t, rig, root, leg, foot, tg * 0.8 + n * 0.4)
+			end
+		end
+	end
+	return t
 end
 
 -- both hands slap the wall in front and slide up it
@@ -657,10 +700,10 @@ local function ikHopPose(root, f)
 end
 
 ---------------------------------------------------------------------
--- custom animation ids (Custom animation IDs row): a loaded track replaces the procedural pose of that move
+-- custom animation id (Custom wall run animation ID row): a loaded track replaces the procedural wall run pose
 ---------------------------------------------------------------------
-local KEYMAP = { run = "idRun", hang = "idHang", mantle = "idMantle", kick = "idKick", hop = "idHop", land = "idLand", sprint = "idSprint", leap = "idLeap" }
-local LOOPED = { run = true, hang = true, sprint = true, leap = true }
+local KEYMAP = { run = "idRun" }
+local LOOPED = { run = true }
 local custom = { tracks = {}, active = nil }
 
 local function stopCustom(fade)
@@ -740,12 +783,19 @@ local function refreshChar()
 		stopCustom(0)
 		table.clear(custom.tracks)
 		resetState()
-		S.char, S.rig, S.rigRetry = char, nil, 0
+		S.char, S.rig, S.rigRetry, S.rigTries = char, nil, 0, 0
 	end
 	local root = Util.rootOf(char)
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if char and hum and (not S.rig or (S.rig.n == 0 and os.clock() >= S.rigRetry and hum.RigType ~= Enum.HumanoidRigType.R6 and hum.RigType == Enum.HumanoidRigType.R15)) then
+	-- a rig built while the character was still loading can miss joints: rebuild it (from clean C0s) until complete
+	local want = hum and (hum.RigType == Enum.HumanoidRigType.R6 and 2 or hum.RigType == Enum.HumanoidRigType.R15 and 10) or 0
+	local incomplete = S.rig and (S.rig.n < want or (want == 10 and not S.rig.lowerRel))
+	if char and hum and (not S.rig or (incomplete and os.clock() >= S.rigRetry and S.rigTries < 20)) then
+		if S.rig then
+			restoreRig(S.rig)
+		end
 		S.rig = buildRig(char, hum)
+		S.rigTries += 1
 		S.rigRetry = os.clock() + 0.5
 		if hum.RigType == Enum.HumanoidRigType.R6 and not S.warnedRig and S.ctx then
 			S.warnedRig = true
@@ -777,7 +827,7 @@ local function abortAll(root, hum)
 	if S.state == "run" then
 		endRun(hum)
 	end
-	S.state, S.run, S.hang, S.mantle, S.flash = "none", nil, nil, nil, nil
+	S.state, S.run, S.hang, S.mantle, S.launch, S.flash = "none", nil, nil, nil, nil, nil
 end
 
 ---------------------------------------------------------------------
@@ -823,6 +873,7 @@ local function wallHop(root, normal, point)
 	S.flash = { kind = "hop", t = 0, dur = 0.35, point = point }
 end
 
+-- pull up to chest height on the ledge (scripted), then step() pops you into the air and pushes you onto it
 local function startMantle(root, hum)
 	local h = S.hang
 	if not h then
@@ -830,13 +881,17 @@ local function startMantle(root, hum)
 	end
 	local standH = hum.HipHeight + root.Size.Y / 2
 	local b = V3(h.cf.Position.X, h.ledgeY + standH + 0.35, h.cf.Position.Z)
-	S.state = "mantle"
-	-- step forward onto the ledge, but only as far as there is floor to stand on (thin ledges / railings)
+	-- land a bit past the lip, but only as far as there is floor to stand on (thin ledges / railings)
 	local c = b - h.n * 1.8
 	if not workspace:Raycast(c + UP * 2, V3(0, -(standH + 4), 0), Util.rayParams()) then
 		c = b - h.n * 0.9
 	end
-	S.mantle = { t = 0, dur = 0.6 / (cfg.mantle.o.speed or 1), a = root.Position, b = b, c = c, n = h.n, grip = h.grip }
+	local a = root.Position
+	S.state = "mantle"
+	S.mantle = {
+		t = 0, dur = MANTLE_PULL / (cfg.mantle.o.speed or 1), a = a, b = b, c = c, n = h.n, grip = h.grip,
+		ledgeY = h.ledgeY, standH = standH, mid = V3(a.X, h.ledgeY - 0.4, a.Z),
+	}
 end
 
 local function dropHang(root)
@@ -1223,23 +1278,36 @@ features.pkCore = {
 				end
 			end
 		elseif S.state == "mantle" then
+			-- scripted pull up to chest height on the ledge, then pop into the air
 			local m = S.mantle
 			m.t += dt
-			local p = m.t / m.dur
-			local pos
-			if p < 0.6 then
-				pos = m.a:Lerp(m.b, smooth(p / 0.6))
-			else
-				pos = m.b:Lerp(m.c, smooth((p - 0.6) / 0.4))
-			end
+			local pos = m.a:Lerp(m.mid, smooth(m.t / m.dur))
 			if not ANCHOR_HOLD then
 				root.AssemblyLinearVelocity = Vector3.zero
 			end
 			root.CFrame = CFrame.lookAt(pos, pos - m.n)
-			if p >= 1 then
+			if m.t >= m.dur then
 				releaseHold(root)
-				root.AssemblyLinearVelocity = -m.n * 10
-				S.state, S.mantle, S.hang = "none", nil, nil
+				-- vertical speed that carries the root to standing height plus a margin, from the real gravity
+				local vy = math.clamp(math.sqrt(2 * workspace.Gravity * (m.b.Y - pos.Y + 0.7)), 20, 90)
+				root.AssemblyLinearVelocity = V3(0, vy, 0)
+				S.launch = { n = m.n, c = m.c, ledgeY = m.ledgeY, standH = m.standH, t = 0 }
+				S.state, S.mantle, S.hang = "launch", nil, nil
+				S.flash = { kind = "hop", t = 0, dur = 0.45 }
+				S.noGrabUntil = now + 0.8
+			end
+		elseif S.state == "launch" then
+			-- rising along the wall: no forward push until the feet are above the ledge (pushing into the wall
+			-- would zero the velocity), then push over it until past the landing point
+			local L = S.launch
+			L.t += dt
+			local v = root.AssemblyLinearVelocity
+			local feetY = root.Position.Y - L.standH
+			local pastC = (root.Position - L.c):Dot(-L.n) >= 0
+			local fwd = (feetY > L.ledgeY - 0.3 and not pastC) and MANTLE_FWD or 0
+			root.AssemblyLinearVelocity = V3(-L.n.X * fwd, v.Y, -L.n.Z * fwd)
+			if (L.t > 0.12 and not air) or L.t > 1 then
+				S.state, S.launch = "none", nil
 				S.noGrabUntil = now + 0.5
 			end
 		end
