@@ -85,10 +85,6 @@ local MANTLE_FWD = 12 -- studs/s pushed toward the ledge once the feet have clea
 -- false = nothing is anchored: velocity is zeroed and the CFrame re-set every frame instead (replicates normally,
 --         may jitter slightly). Flip this if people report you "freezing" on ledges.
 local ANCHOR_HOLD = true
--- true = a small blue notification the first time a pose kind kicks in (kind, joints found, pose strength, anim row on/off).
--- If you configure a style and see no such notice, the pose is not being selected; if you see it with joints < 10,
--- the rig is incomplete; if strength is 0.00, the Pose strength slider is at 0 or the anim row is off.
-local DEBUG = true
 
 local KEYS = {
 	["Left Shift"] = Enum.KeyCode.LeftShift,
@@ -407,6 +403,7 @@ local function sprintPose(phase, o)
 	local lean, pump = o.lean or 1, o.pump or 1
 	local stride, twist = o.stride or 1, o.twist or 0.5
 	local style = o.style or "Pump"
+	local r6 = S.rig and S.rig.r6 -- straight arms, no elbows: a big back swing looks like a naruto run
 	local t = {}
 	local s, c = math.sin(phase), math.cos(phase)
 	-- torso rotates against the hips, the head stays roughly facing forward
@@ -430,8 +427,9 @@ local function sprintPose(phase, o)
 		add(t, "Neck", 0.25 * lean)
 		add(t, "RightElbow", 1.55)
 		add(t, "LeftElbow", 1.55)
-		add(t, "RightShoulder", s * 1.0 * pump)
-		add(t, "LeftShoulder", -s * 1.0 * pump)
+		local ab, aa = r6 and 0.7 or 0, r6 and 0.6 or 1.0
+		add(t, "RightShoulder", ab + s * aa * pump)
+		add(t, "LeftShoulder", ab - s * aa * pump)
 		add(t, "RightHip", -s * 0.75 * stride)
 		add(t, "LeftHip", s * 0.75 * stride)
 		add(t, "RightKnee", -1.2 * math.max(0, s) * stride)
@@ -441,8 +439,9 @@ local function sprintPose(phase, o)
 		add(t, "Neck", 0.2 * lean)
 		add(t, "RightElbow", 1.2 * pump)
 		add(t, "LeftElbow", 1.2 * pump)
-		add(t, "RightShoulder", s * 0.7 * pump)
-		add(t, "LeftShoulder", -s * 0.7 * pump)
+		local ab, aa = r6 and 0.5 or 0, r6 and 0.45 or 0.7
+		add(t, "RightShoulder", ab + s * aa * pump)
+		add(t, "LeftShoulder", ab - s * aa * pump)
 		add(t, "RightHip", -s * 0.5 * stride)
 		add(t, "LeftHip", s * 0.5 * stride)
 		add(t, "RightKnee", -0.9 * math.max(0, s) * stride)
@@ -1368,19 +1367,6 @@ features.pkCore = {
 			kind = (air and cfg.anim.o.leap ~= false) and "leap" or "sprint"
 		end
 
-		if DEBUG and kind and kind ~= S.dbgKind and now - (S.dbgAt or 0) > 1 and S.ctx then
-			S.dbgAt = now
-			local names = {}
-			if S.rig then
-				for k in pairs(S.rig.joints) do
-					names[#names + 1] = k
-				end
-				table.sort(names)
-			end
-			S.ctx.notify(("parkour dbg: %s | joints %d (%s) | strength %.2f | anim row %s"):format(
-				kind, S.rig and S.rig.n or 0, table.concat(names, ","), lerp(0, 1.5, cfg.anim.v), tostring(cfg.anim.on)), Color3.fromRGB(120, 200, 255))
-		end
-		S.dbgKind = kind
 
 		local usingCustom = false
 		if cfg.custom.on then
