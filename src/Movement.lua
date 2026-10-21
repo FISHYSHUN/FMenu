@@ -218,6 +218,11 @@ local function airborne(hum)
 	return st ~= Enum.HumanoidStateType.Climbing and st ~= Enum.HumanoidStateType.Swimming
 end
 
+-- WalkSpeed is stored as a 32 bit float, so what you read back is not exactly what you wrote (33.6 -> 33.59999)
+local function near(a, b)
+	return math.abs(a - b) < 0.01
+end
+
 local function smooth(x)
 	x = math.clamp(x, 0, 1)
 	return x * x * (3 - 2 * x)
@@ -1012,17 +1017,17 @@ features.pkCore = {
 			if not S.sprintOn then
 				S.sprintOn = true
 				S.origWS = hum.WalkSpeed
-			elseif S.sprintSet and hum.WalkSpeed ~= S.sprintSet then
+			elseif S.sprintSet and not near(hum.WalkSpeed, S.sprintSet) then
 				S.origWS = hum.WalkSpeed -- the game (or the Speed row) changed it: that is the new normal speed
 			end
 			local target = math.max(S.origWS, lerp(16, 60, cfg.sprint.v))
-			if hum.WalkSpeed ~= target then
+			if not near(hum.WalkSpeed, target) then
 				hum.WalkSpeed = target
 			end
 			S.sprintSet = target
 		elseif S.sprintOn then
 			S.sprintOn = false
-			if S.sprintSet and hum.WalkSpeed == S.sprintSet then
+			if S.sprintSet and near(hum.WalkSpeed, S.sprintSet) then
 				hum.WalkSpeed = S.origWS
 			end
 			S.sprintSet = nil
@@ -1215,7 +1220,7 @@ features.pkCore = {
 		if S.autoRotate ~= nil and hum then
 			hum.AutoRotate = S.autoRotate
 		end
-		if S.sprintOn and hum and S.sprintSet and hum.WalkSpeed == S.sprintSet then
+		if S.sprintOn and hum and S.sprintSet and near(hum.WalkSpeed, S.sprintSet) then
 			hum.WalkSpeed = S.origWS
 		end
 		if S.rig then
