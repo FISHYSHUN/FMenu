@@ -85,6 +85,10 @@ local MANTLE_FWD = 12 -- studs/s pushed toward the ledge once the feet have clea
 -- false = nothing is anchored: velocity is zeroed and the CFrame re-set every frame instead (replicates normally,
 --         may jitter slightly). Flip this if people report you "freezing" on ledges.
 local ANCHOR_HOLD = true
+-- true = a small blue notification the first time a pose kind kicks in (kind, joints found, pose strength, anim row on/off).
+-- If you configure a style and see no such notice, the pose is not being selected; if you see it with joints < 10,
+-- the rig is incomplete; if strength is 0.00, the Pose strength slider is at 0 or the anim row is off.
+local DEBUG = true
 
 local KEYS = {
 	["Left Shift"] = Enum.KeyCode.LeftShift,
@@ -106,6 +110,8 @@ Movement.tab = { name = "Parkour", rows = {
 		{ type = "slider", key = "twist", label = "Torso twist", min = 0, max = 1.5, step = 0.05, pct = true, default = 0.5 },
 		{ type = "slider", key = "cadence", label = "Cadence", min = 0.5, max = 2, step = 0.05, unit = "x", default = 1 },
 		{ type = "slider", key = "fovKick", label = "FOV kick", min = 0, max = 25, step = 1, unit = " deg", default = 8 },
+		{ type = "toggle", key = "always", label = "Run style also when walking / running (no key)", default = true },
+		{ type = "toggle", key = "replace", label = "Replace the game's run animation", default = true },
 	} },
 	{ header = "Walls" },
 	{ id = "pkWallRun", label = "Wall run", slider = "Max run time", value = 45, on = false, fmt = function(v) return ("%.1fs"):format(lerp(0.5, 4, v)) end, opts = {
@@ -1330,9 +1336,16 @@ features.pkCore = {
 			kind, kdur = "mantle", S.mantle.dur
 		elseif S.flash then
 			kind, kdur = S.flash.kind, S.flash.dur
-		elseif S.sprintOn and hv > RUN_MIN_SPEED then
+		elseif cfg.sprint.on and hv > 3 and (S.sprintOn or (not air and cfg.sprint.o.always ~= false and hum.MoveDirection.Magnitude > 0.1)) then
 			kind = (air and cfg.anim.o.leap ~= false) and "leap" or "sprint"
 		end
+
+		if DEBUG and kind and kind ~= S.dbgKind and now - (S.dbgAt or 0) > 1 and S.ctx then
+			S.dbgAt = now
+			S.ctx.notify(("parkour dbg: %s | joints %d | strength %.2f | anim row %s"):format(
+				kind, S.rig and S.rig.n or 0, lerp(0, 1.5, cfg.anim.v), tostring(cfg.anim.on)), Color3.fromRGB(120, 200, 255))
+		end
+		S.dbgKind = kind
 
 		local usingCustom = false
 		if cfg.custom.on then
@@ -1367,6 +1380,8 @@ features.pkCore = {
 			elseif kind == "sprint" then
 				S.phase += dt * hv * 0.55 * (cfg.sprint.o.cadence or 1)
 				pose = sprintPose(S.phase, cfg.sprint.o)
+				-- layered on top of the game's run cycle the offsets drown in it, so by default it takes over
+				override = cfg.sprint.o.replace ~= false
 			end
 			if override then
 				stopTracks(hum) -- the game's animation would fight the pose
