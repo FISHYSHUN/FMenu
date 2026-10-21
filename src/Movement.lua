@@ -265,6 +265,12 @@ local function buildRig(char, hum)
 					rig.n += 1
 				end
 			end
+			-- R6 has no waist: the root joint (root part -> torso) stands in for it, so lean / twist move the whole torso
+			local rj = root:FindFirstChild("RootJoint")
+			if rj and rj:IsA("Motor6D") and not rig.joints.Waist then
+				rig.joints.Waist = { m = rj, c0 = rj.C0, c0rot = rj.C0 - rj.C0.Position, cur = Vector3.zero, curR = CFrame.new(), dirty = false }
+				rig.n += 1
+			end
 			if rig.joints.RightShoulder and rig.joints.LeftShoulder then
 				rig.r6, rig.noElbow = true, true
 				rig.torsoRel = root.CFrame:ToObjectSpace(torso.CFrame)
@@ -381,6 +387,15 @@ end
 -- R15 joint axes assumed: arm / leg forward = +X, outward arm = +Z (right) / -Z (left),
 -- torso forward lean = -X, knee / elbow bend = -X / +X.
 -- o = the Sprint row's options: style, lean, pump, stride, twist (cadence is applied to the phase by the caller)
+-- R6: the legs hang off the torso, so a torso lean / twist would drag them along. Cancel it on the hips.
+local function r6Legs(t)
+	local w = t and t.Waist
+	if typeof(w) == "Vector3" then
+		add(t, "RightHip", -w.X, -w.Y, -w.Z)
+		add(t, "LeftHip", -w.X, -w.Y, -w.Z)
+	end
+end
+
 local function sprintPose(phase, o)
 	local lean, pump = o.lean or 1, o.pump or 1
 	local stride, twist = o.stride or 1, o.twist or 0.5
@@ -655,6 +670,7 @@ local function ikMantlePose(p, root, m)
 		return nil
 	end
 	local t = mantlePose(p)
+	t.Waist = nil -- the hand IK frames assume an unbent torso
 	local right = (-m.n):Cross(UP)
 	if right.Magnitude < 0.01 then
 		return nil
@@ -803,7 +819,7 @@ local function refreshChar()
 	local root = Util.rootOf(char)
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	-- a rig built while the character was still loading can miss joints: rebuild it (from clean C0s) until complete
-	local want = hum and (hum.RigType == Enum.HumanoidRigType.R6 and 5 or hum.RigType == Enum.HumanoidRigType.R15 and 10) or 0
+	local want = hum and (hum.RigType == Enum.HumanoidRigType.R6 and 6 or hum.RigType == Enum.HumanoidRigType.R15 and 10) or 0
 	local incomplete = S.rig and (S.rig.n < want or (want == 10 and not S.rig.lowerRel))
 	if char and hum and (not S.rig or (incomplete and os.clock() >= S.rigRetry and S.rigTries < 20)) then
 		if S.rig then
@@ -1387,6 +1403,9 @@ features.pkCore = {
 				pose = sprintPose(S.phase, cfg.sprint.o)
 				-- layered on top of the game's run cycle the offsets drown in it, so by default it takes over
 				override = cfg.sprint.o.replace ~= false
+			end
+			if S.rig and S.rig.r6 then
+				r6Legs(pose)
 			end
 			if override then
 				stopTracks(hum) -- the game's animation would fight the pose
