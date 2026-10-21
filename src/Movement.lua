@@ -104,6 +104,8 @@ Movement.tab = { name = "Parkour", rows = {
 	{ id = "pkWallRun", label = "Wall run", slider = "Max run time", value = 45, on = false, fmt = function(v) return ("%.1fs"):format(lerp(0.5, 4, v)) end, opts = {
 		{ type = "slider", key = "speed", label = "Run speed", min = 14, max = 60, step = 1, unit = " sp", default = 30 },
 		{ type = "slider", key = "tilt", label = "Camera tilt", min = 0, max = 20, step = 1, unit = " deg", default = 8 },
+		{ type = "slider", key = "stride", label = "Leg stride", min = 0, max = 1.5, step = 0.05, pct = true, default = 1 },
+		{ type = "slider", key = "cadence", label = "Leg cadence", min = 0.5, max = 2, step = 0.05, unit = "x", default = 1 },
 		{ type = "slider", key = "bodyTilt", label = "Body tilt (away from wall)", min = 0, max = 45, step = 1, unit = " deg", default = 15 },
 		{ type = "toggle", key = "needKey", label = "Needs move key held", default = true },
 	} },
@@ -182,6 +184,7 @@ local S = {
 	run = nil, hang = nil, mantle = nil, flash = nil,
 	noWallUntil = 0, noGrabUntil = 0, lastRunPart = nil,
 	airJumps = 0, hops = 0,
+	cyc = 0, -- 0..1 fade-in of the running cycle (the cycle itself must not be low-pass filtered)
 	upright = 0, -- seconds left of easing the body back upright after a tilted wall run
 	wasAir = false, fallV = 0, -- landing detection: was airborne last frame, fastest fall speed of this air time
 	sprintOn = false, sprintSet = nil, origWS = 16, phase = 0,
@@ -405,9 +408,11 @@ local function sprintPose(phase, o)
 end
 
 -- side = +1 wall on the right, -1 wall on the left
-local function runPose(phase, side)
+local function runPose(phase, side, o)
+	o = o or {}
+	local stride = o.stride or 1
 	local t = {}
-	local s = math.sin(phase * 1.4)
+	local s = math.sin(phase * 1.4 * (o.cadence or 1))
 	add(t, "Waist", -0.15, 0, 0.2 * side) -- top leans away from the wall (the body tilt does the rest)
 	add(t, "Neck", 0.15)
 	if side > 0 then
@@ -419,10 +424,10 @@ local function runPose(phase, side)
 	end
 	add(t, "RightElbow", 0.6)
 	add(t, "LeftElbow", 0.6)
-	add(t, "RightHip", -s * 1.0)
-	add(t, "LeftHip", s * 1.0)
-	add(t, "RightKnee", -1.0 * math.max(0, s))
-	add(t, "LeftKnee", -1.0 * math.max(0, -s))
+	add(t, "RightHip", -s * 1.0 * stride)
+	add(t, "LeftHip", s * 1.0 * stride)
+	add(t, "RightKnee", -1.4 * math.max(0, s) * stride)
+	add(t, "LeftKnee", -1.4 * math.max(0, -s) * stride)
 	return t
 end
 
@@ -624,12 +629,12 @@ local function ikMantlePose(p, root, m)
 end
 
 -- the hand on the wall side is pressed against the wall
-local function ikRunPose(phase, side, root, r)
+local function ikRunPose(phase, side, root, r, o)
 	local rig = ikReady()
 	if not rig then
 		return nil
 	end
-	local t = runPose(phase, side)
+	local t = runPose(phase, side, o)
 	local point = root.Position - r.normal * (r.dist or REACH) + r.tangent * 0.35 + UP * 0.4
 	-- elbow points back and down, away from the wall
 	local pole = -r.tangent * 0.6 + V3(0, -0.6, 0) + r.normal * 0.3
@@ -1275,7 +1280,7 @@ features.pkCore = {
 			local speed = cfg.anim.o.smooth or 10
 			local pose, override
 			if kind == "run" then
-				pose, override = ikRunPose(S.phase, S.run.side, root, S.run) or runPose(S.phase, S.run.side), true
+				pose, override = ikRunPose(S.phase, S.run.side, root, S.run, cfg.run.o) or runPose(S.phase, S.run.side, cfg.run.o), true
 			elseif kind == "hang" then
 				pose, override = ikHangPose(now, root, S.hang) or hangPose(now), true
 			elseif kind == "mantle" then
@@ -1298,7 +1303,16 @@ features.pkCore = {
 			if override then
 				stopTracks(hum) -- the game's animation would fight the pose
 			end
-			applyPose(dt, pose, strength, speed)
+			-- A running cycle swings several times a second. Smoothing it at the normal rate flattens it to a
+			-- fraction of its size (legs looked still), so cycles are written almost directly and only their
+			-- fade in / out is eased.
+			local cyclic = kind == "run" or kind == "sprint"
+			S.cyc += ((cyclic and 1 or 0) - S.cyc) * (1 - math.exp(-dt * 8))
+			if cyclic then
+				applyPose(dt, pose, strength * S.cyc, 80)
+			else
+				applyPose(dt, pose, strength, speed)
+			end
 		end
 	end,
 
