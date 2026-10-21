@@ -256,10 +256,12 @@ local function buildRig(char, hum)
 		-- poses are not used on it and there is no elbow.
 		local root, torso, ra = char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Torso"), char:FindFirstChild("Right Arm")
 		if root and torso then
+			-- R6 has no waist / elbows / knees: arms, legs and the neck swing, the rest of a pose is skipped
+			local R6MAP = { ["Right Shoulder"] = "RightShoulder", ["Left Shoulder"] = "LeftShoulder", ["Right Hip"] = "RightHip", ["Left Hip"] = "LeftHip", Neck = "Neck" }
 			for _, d in ipairs(torso:GetChildren()) do
-				local name = d:IsA("Motor6D") and (d.Name == "Right Shoulder" and "RightShoulder" or d.Name == "Left Shoulder" and "LeftShoulder")
+				local name = d:IsA("Motor6D") and R6MAP[d.Name]
 				if name and not rig.joints[name] then
-					rig.joints[name] = { m = d, c0 = d.C0, cur = Vector3.zero, curR = CFrame.new(), dirty = false }
+					rig.joints[name] = { m = d, c0 = d.C0, c0rot = d.C0 - d.C0.Position, cur = Vector3.zero, curR = CFrame.new(), dirty = false }
 					rig.n += 1
 				end
 			end
@@ -318,6 +320,16 @@ end
 
 -- eases every joint toward its target angles (radians, x / y / z) and writes C0 = original * rotation
 -- a target is a Vector3 (euler angles) or a CFrame (a rotation, used by the IK); both ease in and out
+-- euler offset of a joint. The poses are written in the torso's frame (R15 joints have no baked rotation); R6 joints
+-- DO have one in their C0, so the rotation is carried into the joint's own frame: C0rot^-1 * Q * C0rot
+local function eul(rig, j)
+	local q = CFrame.Angles(j.cur.X, j.cur.Y, j.cur.Z)
+	if rig.r6 and j.c0rot then
+		return j.c0rot:Inverse() * q * j.c0rot
+	end
+	return q
+end
+
 local function applyPose(dt, targets, strength, speed)
 	local rig = S.rig
 	if not rig then
@@ -328,13 +340,10 @@ local function applyPose(dt, targets, strength, speed)
 	for name, j in pairs(rig.joints) do
 		if j.m.Parent then
 			local t = targets and targets[name]
-			if rig.r6 and typeof(t) ~= "CFrame" then
-				t = nil -- euler poses are written for R15 axes
-			end
 			if typeof(t) == "CFrame" then
 				j.curR = j.curR:Lerp(ident:Lerp(t, math.min(strength, 1)), k)
 				j.cur = j.cur:Lerp(Vector3.zero, k)
-				j.m.C0 = j.c0 * j.curR * CFrame.Angles(j.cur.X, j.cur.Y, j.cur.Z)
+				j.m.C0 = j.c0 * j.curR * eul(rig, j)
 				j.dirty = true
 			elseif t or j.dirty then -- settled joints with no target cost nothing
 				j.cur = j.cur:Lerp((t or Vector3.zero) * strength, k)
@@ -344,7 +353,7 @@ local function applyPose(dt, targets, strength, speed)
 					j.curR = ident
 				end
 				if j.cur.Magnitude > 1e-3 or ang >= 1e-3 then
-					j.m.C0 = j.c0 * j.curR * CFrame.Angles(j.cur.X, j.cur.Y, j.cur.Z)
+					j.m.C0 = j.c0 * j.curR * eul(rig, j)
 					j.dirty = true
 				elseif j.dirty then
 					j.m.C0 = j.c0
@@ -794,7 +803,7 @@ local function refreshChar()
 	local root = Util.rootOf(char)
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	-- a rig built while the character was still loading can miss joints: rebuild it (from clean C0s) until complete
-	local want = hum and (hum.RigType == Enum.HumanoidRigType.R6 and 2 or hum.RigType == Enum.HumanoidRigType.R15 and 10) or 0
+	local want = hum and (hum.RigType == Enum.HumanoidRigType.R6 and 5 or hum.RigType == Enum.HumanoidRigType.R15 and 10) or 0
 	local incomplete = S.rig and (S.rig.n < want or (want == 10 and not S.rig.lowerRel))
 	if char and hum and (not S.rig or (incomplete and os.clock() >= S.rigRetry and S.rigTries < 20)) then
 		if S.rig then
@@ -803,10 +812,6 @@ local function refreshChar()
 		S.rig = buildRig(char, hum)
 		S.rigTries += 1
 		S.rigRetry = os.clock() + 0.5
-		if hum.RigType == Enum.HumanoidRigType.R6 and not S.warnedRig and S.ctx then
-			S.warnedRig = true
-			S.ctx.notify("parkour: R6 character, hands reach ledges and walls but the body poses are R15 only", Color3.fromRGB(255, 214, 64))
-		end
 	end
 	return char, root, hum
 end
