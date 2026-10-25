@@ -9,6 +9,11 @@
 --   Aim lock    hold right mouse. Picks a target inside the ring, then stays on it (even if it leaves the
 --               ring) until you let go, it dies, or it goes out of sight. Smoothing 0 = hard snap.
 --   With both on, lock wins.
+--   Target priority (Aim part row): crosshair / distance / lowest health. When the target dies or leaves sight
+--               the aim waits "Retarget delay" before taking the next one, so it never snaps instantly.
+--   Triggerbot  clicks while the crosshair is on an enemy. "Head only" fires on the head hitbox only, "Hold fire"
+--               keeps the button down instead of clicking (automatic guns) and always lets go on target loss,
+--               when you type in a text box, when the row is turned off and when the menu is destroyed.
 --   Wireframe viewmodel  hides your gun / arms and draws the edges of every part instead (blender style).
 --
 -- Rivals teleports you from the lobby into a match (a different place of the same universe). This module
@@ -35,8 +40,8 @@ end
 
 local CHEST = { "UpperTorso", "Torso", "HumanoidRootPart" }
 
-local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0 }
-local aim = { assist = false, lock = false, strength = 0.4, smooth = 0, bound = false, target = nil, dead = 0.4, falloff = 0.6 }
+local shared = { fov = 150, team = true, visible = true, part = "head", lead = 0, priority = "Crosshair", retarget = 0.25 }
+local aim = { assist = false, lock = false, strength = 0.4, smooth = 0, bound = false, target = nil, dead = 0.4, falloff = 0.6, cool = 0 }
 
 local function isEnemy(plr)
 	if plr == lp then
@@ -106,18 +111,41 @@ local function pick(char, center, cam, maxDist)
 	return best, bestD
 end
 
--- closest enemy to the screen centre inside `radius` pixels -> part, player, distance
+-- lower is better. Crosshair = pixels from the screen centre, Distance = studs from you, Lowest health = hp
+-- (the crosshair distance breaks ties, so equal hp picks the one you are closest to aiming at)
+local function score(plr, part, d, cam)
+	if shared.priority == "Distance" then
+		return (part.Position - cam.CFrame.Position).Magnitude
+	elseif shared.priority == "Lowest health" then
+		local hum = Util.humanoid(plr.Character)
+		return (hum and hum.Health or 100) * 1000 + d
+	end
+	return d
+end
+
+-- best enemy inside `radius` pixels of the screen centre by the current priority -> part, player, distance
 local function acquire(cam, center, radius)
-	local bestPart, bestPlr, bestD
+	local bestPart, bestPlr, bestD, bestS
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if valid(plr) then
 			local part, d = pick(plr.Character, center, cam, radius)
-			if part and (not bestD or d < bestD) then
-				bestPart, bestPlr, bestD = part, plr, d
+			if part then
+				local s = score(plr, part, d, cam)
+				if not bestS or s < bestS then
+					bestPart, bestPlr, bestD, bestS = part, plr, d, s
+				end
 			end
 		end
 	end
 	return bestPart, bestPlr, bestD
+end
+
+local function vimButton(down)
+	pcall(function()
+		local vim = game:GetService("VirtualInputManager")
+		local vp = workspace.CurrentCamera.ViewportSize
+		vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, down, game, 0)
+	end)
 end
 
 local function click()
@@ -125,12 +153,25 @@ local function click()
 		mouse1click()
 		return
 	end
-	pcall(function()
-		local vim = game:GetService("VirtualInputManager")
-		local vp = workspace.CurrentCamera.ViewportSize
-		vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
-		vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
-	end)
+	vimButton(true)
+	vimButton(false)
+end
+
+-- hold fire: press once and release later (automatic weapons)
+local function press()
+	if mouse1press then
+		mouse1press()
+	else
+		vimButton(true)
+	end
+end
+
+local function release()
+	if mouse1release then
+		mouse1release()
+	else
+		vimButton(false)
+	end
 end
 
 local Rivals = {
@@ -151,11 +192,16 @@ local Rivals = {
 			{ type = "toggle", key = "tint", label = "Custom color", default = false },
 			{ type = "hue", key = "hue", label = "Hue", default = 0.55 },
 		} },
-		{ id = "rvPart", label = "Aim part", slider = "Head / Chest / Closest", value = 0, on = true, fmt = function(v) return v < 34 and "Head" or (v < 67 and "Chest" or "Closest") end },
+		{ id = "rvPart", label = "Aim part", slider = "Head / Chest / Closest", value = 0, on = true, fmt = function(v) return v < 34 and "Head" or (v < 67 and "Chest" or "Closest") end, opts = {
+			{ type = "choice", key = "priority", label = "Target priority", choices = { "Crosshair", "Distance", "Lowest health" }, default = "Crosshair" },
+			{ type = "slider", key = "retarget", label = "Retarget delay", min = 0, max = 1, step = 0.05, unit = "s", default = 0.25 },
+		} },
 		{ id = "rvPred", label = "Prediction", slider = "Lead amount", value = 30, on = false, fmt = range(0, 100, "%") },
 		{ header = "Shooting & ESP" },
 		{ id = "rvTrigger", label = "Triggerbot", slider = "Reaction delay", value = 15, on = false, fmt = range(0, 300, "ms"), opts = {
 			Util.modeOption(),
+			{ type = "choice", key = "hit", label = "Fire on", choices = { "Any part", "Head only" }, default = "Any part" },
+			{ type = "toggle", key = "holdFire", label = "Hold fire (automatic guns)", default = false },
 			{ type = "slider", key = "interval", label = "Time between clicks", min = 0.05, max = 0.5, step = 0.01, unit = "s", default = 0.12 },
 		} },
 		{ id = "rvEsp", label = "Enemy ESP", slider = "Max distance", value = 100, on = false, fmt = range(100, 2000, " st"), opts = ESP.options("player") },
@@ -204,8 +250,11 @@ features.rvVis = {
 }
 
 features.rvPart = {
-	set = function(on, v)
+	set = function(on, v, _c, o)
+		o = o or {}
 		shared.part = (not on or v < 34) and "head" or (v < 67 and "chest" or "closest")
+		shared.priority = o.priority or "Crosshair"
+		shared.retarget = o.retarget or 0.25
 	end,
 }
 
@@ -232,7 +281,7 @@ do
 
 	local function aimStep(dt)
 		if not aimHeld() or UserInputService:GetFocusedTextBox() then
-			aim.target = nil
+			aim.target, aim.cool = nil, 0 -- a fresh press picks a target right away
 			return
 		end
 		local cam = workspace.CurrentCamera
@@ -244,10 +293,19 @@ do
 
 		-- keep the current target while it stays valid (lock: anywhere on screen, assist: a bit past the ring)
 		local part, d
-		if aim.target and valid(aim.target) then
-			part, d = pick(aim.target.Character, center, cam, aim.lock and math.huge or shared.fov * 1.3)
+		if aim.target then
+			if valid(aim.target) then
+				part, d = pick(aim.target.Character, center, cam, aim.lock and math.huge or shared.fov * 1.3)
+			end
+			if not part then -- died, left sight or left the ring: wait before taking the next one, no instant snap
+				aim.target = nil
+				aim.cool = os.clock() + shared.retarget
+			end
 		end
 		if not part then
+			if os.clock() < aim.cool then
+				return
+			end
 			local plr
 			part, plr, d = acquire(cam, center, shared.fov)
 			aim.target = plr
@@ -379,7 +437,7 @@ do
 				local hum = Util.humanoid(plr.Character)
 				local root, myRoot = Util.rootOf(plr.Character), Util.root()
 				local dist = (root and myRoot) and (root.Position - myRoot.Position).Magnitude or 0
-				label.Text = ("%s  %dhp  %dm"):format(plr.DisplayName, math.floor(hum and hum.Health or 0), math.floor(dist))
+				label.Text = ("%s  %dhp  %dm  [%s]"):format(plr.DisplayName, math.floor(hum and hum.Health or 0), math.floor(dist), aim.lock and "lock" or "assist")
 			else
 				label.Text = "no target"
 			end
@@ -387,9 +445,20 @@ do
 	}
 end
 
--- triggerbot: clicks while the crosshair is on an enemy. value = reaction delay 0 to 300 ms
+-- triggerbot: clicks (or holds the button) while the crosshair is on an enemy. value = reaction delay 0 to 300 ms
 do
 	local enabled, delay, acquiredAt, lastClick, cfg, jitter, extra = false, 0.05, nil, 0, {}, 0, 0
+	local holding, lostAt = false, nil
+
+	-- never leave the mouse button stuck down
+	local function letGo()
+		if holding then
+			holding = false
+			release()
+		end
+		lostAt = nil
+	end
+
 	features.rvTrigger = {
 		set = function(on, v, _c, o)
 			enabled = on
@@ -399,6 +468,7 @@ do
 			jitter = L.jitter / 1000
 			if not on then
 				acquiredAt = nil
+				letGo()
 			end
 		end,
 		step = function()
@@ -406,21 +476,52 @@ do
 				return
 			end
 			local cam = workspace.CurrentCamera
+			if not cam or UserInputService:GetFocusedTextBox() then
+				acquiredAt = nil
+				letGo()
+				return
+			end
 			local hit = workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * 1500, Util.rayParams())
 			local plr = hit and Util.playerFromPart(hit.Instance)
-			if plr and isEnemy(plr) and Util.isAlive(plr.Character) then
-				local now = os.clock()
+			local onTarget = plr ~= nil and isEnemy(plr) and Util.isAlive(plr.Character)
+				and (cfg.hit ~= "Head only" or hit.Instance.Name == "Head")
+			local now = os.clock()
+			if onTarget then
+				lostAt = nil
 				if not acquiredAt then
 					acquiredAt = now
 					extra = math.random() * jitter -- humanised: a different reaction time every time
 				end
-				if now - acquiredAt >= delay + extra and now - lastClick > (cfg.interval or 0.12) then
-					lastClick = now
-					click()
+				if now - acquiredAt >= delay + extra then
+					if cfg.holdFire then
+						if not holding then
+							holding = true
+							press()
+						end
+					else
+						if holding then
+							letGo() -- hold fire was switched off mid burst
+						end
+						if now - lastClick > (cfg.interval or 0.12) then
+							lastClick = now
+							click()
+						end
+					end
 				end
 			else
 				acquiredAt = nil
+				if holding then
+					lostAt = lostAt or now
+					if now - lostAt > 0.06 then -- short grace so a single flickering frame does not tap the trigger
+						letGo()
+					end
+				end
 			end
+		end,
+		destroy = function()
+			enabled = false
+			acquiredAt = nil
+			letGo()
 		end,
 	}
 end
@@ -565,7 +666,7 @@ do
 	local OFFS = { Vector3.new(0, 0, 0), Vector3.new(1, 1, 1), Vector3.new(-1, -1, -1), Vector3.new(1, -1, 1) }
 	local STEP = 0.006 -- studs between copies
 
-	local enabled, cfg, acc, busy, reported = false, {}, 0, false, false
+	local enabled, cfg, acc, busy, reported, dumped = false, {}, 0, false, false, false
 	local wires = {} -- part -> { adorns, sig, hidden }
 	local meshData = {} -- MeshId -> list of { v1, v2, v3 } or false
 	local folder
@@ -717,13 +818,18 @@ do
 		if n > 0 then
 			reported = true
 			ctx.notify(("wireframe: %d parts"):format(n), Color3.fromRGB(72, 214, 134))
-		else
+		elseif not dumped then
+			-- print once per enable (not every scan): camera children and their children, to fill VM_NAMES / HAND_WORDS
+			dumped = true
 			local names = {}
 			local cam = workspace.CurrentCamera
 			for _, c in ipairs(cam and cam:GetChildren() or {}) do
 				names[#names + 1] = c.Name .. "(" .. c.ClassName .. ")"
+				for _, cc in ipairs(c:GetChildren()) do
+					names[#names + 1] = c.Name .. "." .. cc.Name .. "(" .. cc.ClassName .. ")"
+				end
 			end
-			print("[FMenu] wireframe: no viewmodel found. camera children: " .. table.concat(names, ", "))
+			print("[FMenu] wireframe: no viewmodel found. camera tree: " .. table.concat(names, ", "))
 		end
 	end
 
@@ -731,7 +837,7 @@ do
 		set = function(on, _v, ctx, o)
 			enabled, cfg = on, o
 			acc = 1
-			reported = false
+			reported, dumped = false, false
 			if not on then
 				dropAll()
 			end
